@@ -1,0 +1,11 @@
+---
+outlines:
+    default:       { width: 40.41,   height: 52     }
+
+views:
+    base:
+        - "Tab-small Ctrl Alt Shift ↑ ↓ ← →"
+        - "q w e r t y u i o p"
+        - "a s d f g h j k l"
+        - "z x c v b n m BackSpace"
+        - "space Return"

@@ -6,6 +6,7 @@ use io_ring::Ring;
 use renderer::Renderer;
 use wayland::*;
 
+mod layout;
 mod render;
 mod window;
 
@@ -57,7 +58,8 @@ fn main() {
         .mount(io_ring::module())
         .mount(wayland::module())
         .mount(render::module())
-        .mount(window::module());
+        .mount(window::module())
+        .mount(layout::module());
 
     app.dispatch(&app::Start);
     loop {
