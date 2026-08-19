@@ -1,5 +1,5 @@
 {
-  description = "mecha-wayland";
+  description = "mechanix-keyboard";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -19,9 +19,18 @@
         lib       = pkgs.lib;
         fn        = fenix.packages.${system};
 
-        # build-std (.cargo/config.toml) requires rust-src at build time.
-        # devToolchain adds it to devShell for rust-analyzer as well.
+        # Prebuilt std cross-build: pull in the aarch64 rust-std rather than
+        # recompiling the standard library (no build-std). rust-src is dev-only,
+        # for rust-analyzer.
         buildToolchain = fn.combine [
+          fn.latest.cargo
+          fn.latest.rustc
+          fn.latest.clippy
+          fn.latest.rustfmt
+          fn.targets.aarch64-unknown-linux-gnu.latest.rust-std
+        ];
+
+        devToolchain = fn.combine [
           fn.latest.cargo
           fn.latest.rustc
           fn.latest.rust-src
@@ -30,34 +39,16 @@
           fn.targets.aarch64-unknown-linux-gnu.latest.rust-std
         ];
 
-        devToolchain = buildToolchain;
-
         craneLib = (crane.mkLib pkgs).overrideToolchain buildToolchain;
 
-        # atlas.toml, .xml (Wayland protocols), and /assets/ are read by build.rs scripts
-        src = lib.cleanSourceWith {
-          src    = ./.;
-          filter = path: type:
-            (craneLib.filterCargoSources path type)
-            || lib.hasSuffix "atlas.toml" path
-            || lib.hasSuffix ".xml"       path
-            || lib.hasInfix  "/assets/"   path;
-        };
-
-        # build-std requires vendoring the stdlib's own deps alongside the
-        # project's deps.  crane's vendorMultipleCargoDeps merges both lockfiles.
-        cargoVendorDir = craneLib.vendorMultipleCargoDeps {
-          cargoLockList = [
-            ./Cargo.lock
-            "${buildToolchain}/lib/rustlib/src/rust/library/Cargo.lock"
-          ];
-        };
+        src = craneLib.cleanCargoSource ./.;
 
         crossArgs = {
-          inherit src cargoVendorDir;
+          inherit src;
           strictDeps = true;
 
-          # Tests are unrunnable with build-std=panic_abort (panic_unwind conflicts).
+          # Cross target: the test binaries are aarch64 and cannot execute on
+          # the x86_64 build host, so skip the check phase.
           doCheck = false;
 
           CARGO_BUILD_TARGET = "aarch64-unknown-linux-gnu";
@@ -66,35 +57,41 @@
             "${pkgsCross.stdenv.cc}/bin/${pkgsCross.stdenv.cc.targetPrefix}cc";
 
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS =
-            "-L${pkgsCross.mesa}/lib -L${pkgsCross.libdrm}/lib -C target-cpu=cortex-a53";
+            "-C target-cpu=cortex-a53";
 
           PKG_CONFIG_ALLOW_CROSS = "1";
           PKG_CONFIG_PATH = lib.makeSearchPathOutput "dev" "lib/pkgconfig"
-            (with pkgsCross; [ mesa libdrm libgbm ]);
+            (with pkgsCross; [ libgbm libdrm ]);
 
+          # libEGL/libGLESv2 are dlopen'd at runtime (khronos-egl `dynamic`
+          # mode), so the only build-time cross link dep is libgbm, which pulls
+          # libdrm through pkg-config.
           nativeBuildInputs = with pkgs; [ pkg-config clang pkgsCross.stdenv.cc ];
-          buildInputs       = with pkgsCross; [ mesa libdrm libgbm libGL ];
+          buildInputs       = with pkgsCross; [ libgbm libdrm ];
         };
 
-        launcherAarch64 = craneLib.buildPackage (crossArgs // {
-          pname          = "launcher";
-          version        = "0.1.0";
-          cargoExtraArgs = "--package launcher";
+        keyboardAarch64 = craneLib.buildPackage (crossArgs // {
+          pname   = "mechanix-keyboard";
+          version = "0.1.0";
 
           nativeBuildInputs = (crossArgs.nativeBuildInputs or []) ++ [ pkgs.patchelf ];
 
+          # The binary runs on the Mecha Comet (Fedora aarch64), not Nix. Point
+          # its interpreter at the device's glibc loader and drop the /nix/store
+          # rpath so glibc's default search path (/usr/lib64) resolves
+          # libgbm/libEGL/libGLESv2/libdrm on the device.
           postInstall = ''
             patchelf \
               --set-interpreter /lib/ld-linux-aarch64.so.1 \
-              --set-rpath /usr/lib/aarch64-linux-gnu:/usr/lib \
-              $out/bin/launcher
+              --remove-rpath \
+              $out/bin/mechanix-keyboard
           '';
         });
 
       in {
         packages = {
-          launcher-aarch64 = launcherAarch64;
-          default          = launcherAarch64;
+          mechanix-keyboard-aarch64 = keyboardAarch64;
+          default                   = keyboardAarch64;
         };
 
         devShells.default = pkgs.mkShell {
