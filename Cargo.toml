@@ -1,0 +1,18 @@
+[package]
+name = "mechanix-keyboard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+app            = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+renderer       = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+assets         = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+io-ring        = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+wayland        = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+utils          = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+ui             = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+interactivity  = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+window-manager = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
