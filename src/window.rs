@@ -126,7 +126,7 @@ fn create_window(s: &mut MechanixKeyboardState) {
             | ZwlrLayerSurfaceV1Anchor::Right,
     );
     layer_surface.set_exclusive_zone(0);
-    layer_surface.set_keyboard_interactivity(ZwlrLayerSurfaceV1KeyboardInteractivity::OnDemand);
+    layer_surface.set_keyboard_interactivity(ZwlrLayerSurfaceV1KeyboardInteractivity::None);
     surface.commit();
 
     s.window = Some(WindowState {
