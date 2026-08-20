@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Instant};
 
 use app::prelude::*;
 use interactivity::InteractivityState;
@@ -29,7 +29,7 @@ pub struct MechanixKeyboardState {
     window: Option<WindowState>,
     #[lens(skip)]
     frame_callbacks: HashSet<ObjectId>,
-    virtual_keyboard_state: Option<VirtualKeyboardState>,
+    virtual_keyboard_state: VirtualKeyboardState,
 }
 
 impl MechanixKeyboardState {
@@ -45,7 +45,10 @@ impl MechanixKeyboardState {
             interactivity: InteractivityState::new(),
             window: None,
             frame_callbacks: HashSet::new(),
-            virtual_keyboard_state: None,
+            virtual_keyboard_state: VirtualKeyboardState {
+                start_time: Instant::now(),
+                keymap: None,
+            },
         }
     }
 }

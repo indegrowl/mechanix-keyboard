@@ -1,14 +1,31 @@
-use std::os::fd::{AsFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::time::Instant;
 
+use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, ftruncate, memfd_create};
+use rustix::io;
+use rustix::mm::{MapFlags, ProtFlags, mmap, munmap};
 use wayland::{WlKeyboardKeyState, WlKeyboardKeymapFormat};
 use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
 use xkbcommon::xkb::{Context, Keymap};
 
 use crate::MechanixKeyboardState;
 
+pub struct KeymapWithFd {
+    fd: OwnedFd,
+    size: u32,
+}
+
+impl KeymapWithFd {
+    pub fn new(text: &[u8]) -> io::Result<Self> {
+        let (fd, size) = make_keymap_fd(text)?;
+        Ok(Self { fd, size })
+    }
+    // No manual Drop impl needed — OwnedFd closes the fd when `KeymapWithFd` drops.
+}
+
 pub struct VirtualKeyboardState {
     pub start_time: Instant,
+    pub keymap: Option<KeymapWithFd>,
 }
 
 /// zwp_virtual_keyboard_v1
@@ -17,13 +34,7 @@ pub struct VirtualKeyboardState {
 /// virtual-keyboard manager, create a virtual keyboard and hand the compositor
 /// a standard keymap.
 pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
-    app::Module::new().on(on_start).on(on_pre_poll)
-}
-
-pub fn on_start(s: &mut MechanixKeyboardState, _: &app::Start) {
-    s.virtual_keyboard_state = Some(VirtualKeyboardState {
-        start_time: Instant::now(),
-    });
+    app::Module::new().on(on_pre_poll)
 }
 
 /// The seat/manager are only known after the registry roundtrip, so create the
@@ -48,32 +59,79 @@ fn on_pre_poll(s: &mut MechanixKeyboardState, _: &app::PrePoll) {
     let keymap = Keymap::new_from_names(&ctx, "", "", "us", "", None, 0)
         .expect("failed to compile default keymap");
     let text = keymap.get_as_string(XKB_KEYMAP_FORMAT_TEXT_V1);
-    let size = text.len() as u32;
 
-    // Back the keymap with a memfd and pass it to the compositor.
-    let name = c"mechanix-keyboard-keymap";
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
-    assert!(fd >= 0, "memfd_create failed");
-    unsafe {
-        libc::ftruncate(fd, size as libc::off_t);
-        let ptr = libc::mmap(
-            std::ptr::null_mut(),
-            size as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            fd,
-            0,
-        );
-        assert!(ptr != libc::MAP_FAILED, "mmap failed");
-        std::ptr::copy_nonoverlapping(text.as_ptr(), ptr as *mut u8, size as usize);
-        libc::munmap(ptr, size as usize);
-    }
-    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+    let keymap_fd = match KeymapWithFd::new(text.as_bytes()) {
+        Ok(keymap) => keymap,
+        Err(err) => {
+            tracing::warn!(%err, "failed to create keymap memfd");
+            return;
+        }
+    };
 
-    vkbd.keymap(WlKeyboardKeymapFormat::XkbV1, owned.as_fd(), size);
+    vkbd.keymap(
+        WlKeyboardKeymapFormat::XkbV1,
+        keymap_fd.fd.as_fd(),
+        keymap_fd.size,
+    );
 
     s.globals.virtual_keyboard = Some(vkbd);
-    tracing::info!(size, "sent keymap to virtual keyboard");
+    s.virtual_keyboard_state.keymap = Some(keymap_fd);
+    tracing::info!("sent keymap to virtual keyboard");
+}
+
+/// Builds a sealed, shared memfd holding `text` as a NUL-terminated
+/// buffer, ready to send as `set_keymap`'s fd + size.
+pub fn make_keymap_fd(text: &[u8]) -> io::Result<(OwnedFd, u32)> {
+    let size = text.len() + 1; // +1 for the trailing NUL the protocol expects
+
+    let fd: OwnedFd = memfd_create(
+        c"mechanix-keyboard-keymap",
+        MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+    )?;
+
+    ftruncate(&fd, size as u64)?;
+
+    // SAFETY: `fd` is a valid memfd truncated to `size` bytes; the mapping
+    // is unmapped (via the guard below) before this function returns, and
+    // nothing else touches `fd` concurrently.
+    let map = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            size,
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::SHARED,
+            &fd,
+            0,
+        )?
+    };
+
+    struct MmapGuard(*mut core::ffi::c_void, usize);
+    impl Drop for MmapGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = munmap(self.0, self.1);
+            }
+        }
+    }
+    let guard = MmapGuard(map, size);
+
+    // SAFETY: `guard.0` points to `size` writable, exclusively-mapped bytes.
+    // We write `text.len()` bytes then the NUL, totaling exactly `size`
+    // bytes, so this cannot read or write out of bounds. The mapping was
+    // freshly ftruncate'd, so the trailing byte is already zero, but we
+    // set it explicitly for clarity/robustness.
+    unsafe {
+        std::ptr::copy_nonoverlapping(text.as_ptr(), guard.0.cast(), text.len());
+        *(guard.0 as *mut u8).add(text.len()) = 0;
+    }
+    drop(guard);
+
+    fcntl_add_seals(
+        &fd,
+        SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE | SealFlags::SEAL,
+    )?;
+
+    Ok((fd, size as u32))
 }
 
 fn send_test_key(s: &mut MechanixKeyboardState) {
@@ -85,8 +143,7 @@ fn send_test_key(s: &mut MechanixKeyboardState) {
             let key = 30;
             let state = WlKeyboardKeyState::Pressed;
             vkbd.key(
-                (Instant::now() - s.virtual_keyboard_state.as_ref().unwrap().start_time).as_millis()
-                    as u32,
+                (Instant::now() - s.virtual_keyboard_state.start_time).as_millis() as u32,
                 key,
                 state.into(),
             );
@@ -101,8 +158,7 @@ fn send_test_key(s: &mut MechanixKeyboardState) {
             let key = 65;
             let state = WlKeyboardKeyState::Released;
             vkbd.key(
-                (Instant::now() - s.virtual_keyboard_state.as_ref().unwrap().start_time).as_millis()
-                    as u32,
+                (Instant::now() - s.virtual_keyboard_state.start_time).as_millis() as u32,
                 key,
                 state.into(),
             );
