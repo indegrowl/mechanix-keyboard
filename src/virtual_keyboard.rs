@@ -1,7 +1,7 @@
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::time::Instant;
 
-use wayland::WlKeyboardKeyState;
+use wayland::{WlKeyboardKeyState, WlKeyboardKeymapFormat};
 use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
 use xkbcommon::xkb::{Context, Keymap};
 
@@ -70,7 +70,7 @@ fn on_pre_poll(s: &mut MechanixKeyboardState, _: &app::PrePoll) {
     }
     let owned = unsafe { OwnedFd::from_raw_fd(fd) };
 
-    vkbd.keymap(XKB_KEYMAP_FORMAT_TEXT_V1, owned.as_fd(), size);
+    vkbd.keymap(WlKeyboardKeymapFormat::XkbV1, owned.as_fd(), size);
 
     s.globals.virtual_keyboard = Some(vkbd);
     tracing::info!(size, "sent keymap to virtual keyboard");
