@@ -393,6 +393,7 @@ dependencies = [
  "assets",
  "interactivity",
  "io-ring",
+ "libc",
  "renderer",
  "serde",
  "tracing",
