@@ -16,3 +16,5 @@ window-manager = { git = "https://github.com/mecha-org/mecha-wayland.git" }
 
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1.0.229", features = ["derive"] }
+yaml_serde = "0.10.7"
