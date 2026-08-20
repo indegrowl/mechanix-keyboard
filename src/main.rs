@@ -43,6 +43,8 @@ pub struct MechanixKeyboardState {
     /// Output buffer-scale factor (HiDPI); read from `wl_output.scale`.
     #[lens(skip)]
     scale: i32,
+    #[lens(skip)]
+    last_hover: Option<String>,
 }
 
 impl MechanixKeyboardState {
@@ -61,6 +63,7 @@ impl MechanixKeyboardState {
             keymap: None,
             atlas_texture: None,
             scale: 1,
+            last_hover: None,
         }
     }
 }

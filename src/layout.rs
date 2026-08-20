@@ -63,6 +63,7 @@ pub struct Row {
 pub struct Key {
     pub label: String,
     pub rect: Rect,
+    pub touch_area: Rect,
 }
 
 impl Row {
@@ -153,9 +154,11 @@ impl View {
             let keys = row
                 .iter()
                 .map(|(label, o)| {
+                    let rect = Rect::new(x, y, o.width, o.height);
                     let key = Key {
                         label: label.clone(),
-                        rect: Rect::new(x, y, o.width, o.height),
+                        rect,
+                        touch_area: rect,
                     };
                     x += o.width;
                     key

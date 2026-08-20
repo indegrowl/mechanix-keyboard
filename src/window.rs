@@ -1,5 +1,8 @@
+use interactivity::pointer::MouseButton;
+use utils::{Point, Rect};
 use wayland::*;
 
+use crate::layout::View;
 use crate::render;
 use crate::{MechanixKeyboardState, RENDER_VIEW};
 
@@ -294,11 +297,77 @@ fn on_keyboard(s: &mut MechanixKeyboardState, event: &WlKeyboardEvent) {
 fn on_pointer(s: &mut MechanixKeyboardState, event: &WlPointerEvent) {
     s.interactivity.call_before_frame();
     s.interactivity.process_pointer(event);
-    tracing::debug!(?event, "pointer input");
+
+    // Copy the surface-local points out before the keymap borrow, so the
+    // interactivity borrow is released for the hit-test below.
+    let position = s.interactivity.pointer.position();
+    let pressed = s
+        .interactivity
+        .pointer
+        .just_pressed_position(MouseButton::Left)
+        .copied();
+
+    let Some((view, f)) = view_and_factor(s) else {
+        return;
+    };
+
+    // Click: which key the left button went down on this frame.
+    if let Some(p) = pressed
+        && let Some(label) = key_at(view, f, p)
+    {
+        tracing::info!(key = %label, "clicked");
+    }
+
+    // Hover: print only when the key under the pointer changes.
+    let now = key_at(view, f, position);
+    if now != s.last_hover {
+        match &now {
+            Some(label) => tracing::info!(key = %label, "hover"),
+            None => tracing::info!("hover: none"),
+        }
+        s.last_hover = now;
+    }
 }
 
 fn on_touch(s: &mut MechanixKeyboardState, event: &WlTouchEvent) {
     s.interactivity.call_before_frame();
     s.interactivity.process_touch(event);
-    tracing::debug!(?event, "touch input");
+
+    let Some((view, f)) = view_and_factor(s) else {
+        return;
+    };
+
+    // Touch exposes no tap-point, only `tapped(rect)`, so probe each key's
+    // touch area for a tap that landed and completed this frame.
+    for key in view.keys() {
+        if s.interactivity.touch.tapped(scale_rect(key.touch_area, f)) {
+            tracing::info!(key = %key.label, "tapped");
+            break;
+        }
+    }
+}
+
+/// The rendered view and the factor mapping its logical layout units onto
+/// surface-local (input) coordinates: `f = logical_width / view_width`. Returns
+/// `None` until the keymap and surface width are known.
+fn view_and_factor(s: &MechanixKeyboardState) -> Option<(&View, f32)> {
+    let view = s.keymap.as_ref()?.view(RENDER_VIEW)?;
+    let view_w = view.width();
+    let logical_w = s.window.as_ref()?.logical_width;
+    if view_w <= 0.0 || logical_w == 0 {
+        return None;
+    }
+    Some((view, logical_w as f32 / view_w))
+}
+
+/// Label of the first key whose (scaled) touch area contains `p`, else `None`.
+fn key_at(view: &View, f: f32, p: Point) -> Option<String> {
+    view.keys()
+        .find(|k| scale_rect(k.touch_area, f).contains_point(p))
+        .map(|k| k.label.clone())
+}
+
+/// Scale a layout-unit rect into surface-local coordinates.
+fn scale_rect(r: Rect, f: f32) -> Rect {
+    Rect::new(r.x() * f, r.y() * f, r.width() * f, r.height() * f)
 }
