@@ -1,0 +1,7 @@
+[[atlas]]
+name = "keyboard"
+
+[[atlas.font]]
+name = "roboto"
+path = "resources/RobotoMono-Regular.ttf"
+sizes = [64]

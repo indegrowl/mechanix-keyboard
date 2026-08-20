@@ -1,14 +1,29 @@
 use std::os::fd::AsFd;
 
-use renderer::commands::{ClearColor, Color};
-use renderer::{DmaBuf, RenderableSurface, Renderer};
+use assets::BakedFont;
+use renderer::commands::{ClearColor, Color, DrawRect, DrawText, Point, Size};
+use renderer::{DmaBuf, RenderableSurface, Renderer, TextureId};
 use wayland::{Handle, ObjectId, WlBuffer, ZwpLinuxBufferParamsV1Flags, ZwpLinuxDmabufV1};
 
-use crate::MechanixKeyboardState;
+use crate::{MechanixKeyboardState, RENDER_VIEW, atlas, layout};
 
-/// Background the keyboard bar clears to. No keys are drawn yet — this solid
-/// fill is only what maps the surface so it can take focus and input.
+/// Background the keyboard bar clears to, behind the keys.
 const CLEAR: Color = Color::from_rgb8(24, 24, 32);
+/// Fill colour of each key box.
+const KEY_BG: Color = Color::from_rgb8(46, 52, 72);
+/// Colour of the key label text.
+const KEY_LABEL: Color = Color::from_rgb8(220, 226, 240);
+/// The baked font used for labels (ASCII 32..126 only).
+const FONT: &BakedFont = &atlas::KEYBOARD_FONT_ROBOTO_64;
+
+/// Logical inset applied to every key box so adjacent keys — which butt together
+/// in the IR — show a visible gap. Scaled to pixels alongside the layout.
+const KEY_INSET: f32 = 2.0;
+/// Depth of the key box (far) and its label (near). `GEQUAL` depth test: larger
+/// z wins, so the label draws over its box.
+const Z_BOX: f32 = 0.10;
+const Z_TEXT: f32 = 0.20;
+
 /// DRM fourcc for ARGB8888, matching the renderer's DmaBuf format.
 const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241;
 
@@ -22,11 +37,65 @@ pub struct Slot {
     pub released: bool,
 }
 
-/// Renderer setup: bring the GPU pipelines up before any surface is drawn.
+/// Renderer setup: bring the GPU pipelines up and upload the glyph atlas before
+/// any surface is drawn. The GL context is current from `Renderer::new`, so the
+/// texture upload is safe here at `Start`.
 pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
     app::Module::new().on(|s: &mut MechanixKeyboardState, _: &app::Start| {
         s.renderer.init_pipelines();
+        match s.renderer.upload_atlas(&atlas::KEYBOARD) {
+            Ok(id) => s.atlas_texture = Some(id),
+            Err(e) => tracing::error!("atlas upload failed: {e:?}"),
+        }
     })
+}
+
+/// Draw one view's keys into the active surface: a filled box per key, its label
+/// centred on top. `buffer_w` is the physical buffer width; the whole view is
+/// scaled uniformly to fill it (`k = buffer_w / view_width`), which keeps the
+/// layout's aspect ratio — the bar's height was sized to match (see `window`).
+fn draw_view(renderer: &mut Renderer, view: &layout::View, tex: Option<TextureId>, buffer_w: f32) {
+    let view_w = view.width();
+    if view_w <= 0.0 {
+        return;
+    }
+    let k = buffer_w / view_w;
+    let inset = KEY_INSET * k;
+
+    for key in view.keys() {
+        let r = key.rect;
+        let bx = r.x() * k + inset;
+        let by = r.y() * k + inset;
+        let bw = (r.width() * k - 2.0 * inset).max(0.0);
+        let bh = (r.height() * k - 2.0 * inset).max(0.0);
+
+        renderer.send_command(DrawRect {
+            color: KEY_BG,
+            origin: Point::new(bx, by),
+            z: Z_BOX,
+            size: Size::new(bw, bh),
+        });
+
+        // Labels outside ASCII 32..126 (Nerd Font / accented glyphs) aren't baked
+        // and `DrawText` skips them — those keys show a box but no label for now.
+        let Some(tex) = tex else { continue };
+        if key.label.trim().is_empty() {
+            continue;
+        }
+        let text_w = FONT.measure_width(&key.label);
+        let tx = bx + (bw - text_w) / 2.0;
+        let baseline = by + FONT.get_baseline_offset(bh);
+        renderer.send_command(DrawText {
+            font: FONT,
+            texture_id: tex,
+            text: key.label.clone(),
+            origin: Point::new(tx, baseline),
+            z: Z_TEXT,
+            color: KEY_LABEL,
+            background: KEY_BG,
+            is_opaque: true,
+        });
+    }
 }
 
 /// Allocate the two dmabuf-backed slots the bar double-buffers between.
@@ -98,16 +167,26 @@ pub fn render(s: &mut MechanixKeyboardState) {
         window.pending_frame = true;
         return;
     }
-    let (w, h) = (window.width, window.height);
+    // Physical buffer dims for scissor/scaling; logical dims for surface damage
+    // (damage is in surface-local coordinates, which are pre-buffer-scale).
+    let buffer_w = window.width;
+    let (lw, lh) = (window.logical_width, window.logical_height);
 
     s.renderer.active_surface(&slots[back].surface);
     s.renderer.set_scissor(None);
     s.renderer.send_command(ClearColor(CLEAR));
+
+    if let Some(view) = s.keymap.as_ref().and_then(|km| km.view(RENDER_VIEW)) {
+        draw_view(&mut s.renderer, view, s.atlas_texture, buffer_w as f32);
+    }
+
     s.renderer.render_frame();
     s.renderer.finish();
 
+    let window = s.window.as_mut().expect("window still present");
+    let slots = window.slots.as_mut().expect("slots still present");
     window.surface.attach(Some(&slots[back].buffer), 0, 0);
-    window.surface.damage(0, 0, w as i32, h as i32);
+    window.surface.damage(0, 0, lw as i32, lh as i32);
     let cb = window.surface.frame();
     window.surface.commit();
     slots[back].released = false;

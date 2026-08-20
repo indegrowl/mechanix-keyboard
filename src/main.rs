@@ -1,14 +1,23 @@
+#![recursion_limit = "1024"]
 use std::collections::HashSet;
 
 use app::prelude::*;
 use interactivity::InteractivityState;
 use io_ring::Ring;
-use renderer::Renderer;
+use renderer::{Renderer, TextureId};
 use wayland::*;
 
 mod layout;
 mod render;
 mod window;
+
+/// The one Keymap view we render this pass. View switching is a later task.
+pub const RENDER_VIEW: &str = "base";
+
+/// Baked glyph atlas + font consts generated at build time by `assets::builder`.
+pub mod atlas {
+    include!(concat!(env!("OUT_DIR"), "/keyboard_gen.rs"));
+}
 
 use window::{WaylandGlobals, WindowState};
 
@@ -26,6 +35,14 @@ pub struct MechanixKeyboardState {
     window: Option<WindowState>,
     #[lens(skip)]
     frame_callbacks: HashSet<ObjectId>,
+    #[lens(skip)]
+    keymap: Option<layout::Keymap>,
+    /// The uploaded glyph atlas, resolved once the renderer has a GL context.
+    #[lens(skip)]
+    atlas_texture: Option<TextureId>,
+    /// Output buffer-scale factor (HiDPI); read from `wl_output.scale`.
+    #[lens(skip)]
+    scale: i32,
 }
 
 impl MechanixKeyboardState {
@@ -41,6 +58,9 @@ impl MechanixKeyboardState {
             interactivity: InteractivityState::new(),
             window: None,
             frame_callbacks: HashSet::new(),
+            keymap: None,
+            atlas_texture: None,
+            scale: 1,
         }
     }
 }

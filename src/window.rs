@@ -1,9 +1,12 @@
 use wayland::*;
 
-use crate::MechanixKeyboardState;
 use crate::render;
+use crate::{MechanixKeyboardState, RENDER_VIEW};
 
-const HEIGHT: u32 = 100;
+/// Placeholder height requested before the first `Configure` reveals the width.
+/// The real height is derived from the granted width (aspect-locked) and
+/// re-requested; no buffer is attached until then, so this is never shown.
+const INITIAL_HEIGHT: u32 = 100;
 
 #[derive(Default)]
 pub struct WaylandGlobals {
@@ -22,8 +25,16 @@ pub struct WindowState {
     pub layer_surface: Handle<ZwlrLayerSurfaceV1>,
     pub slots: Option<[render::Slot; 2]>,
     pub back: usize,
+    /// Physical buffer dimensions (logical × buffer-scale) — what the dmabuf and
+    /// GL viewport are sized to.
     pub width: u32,
     pub height: u32,
+    /// Surface-logical dimensions (pre-buffer-scale), used for surface damage.
+    pub logical_width: u32,
+    pub logical_height: u32,
+    /// The logical height we last asked the compositor for, so we only re-request
+    /// (and wait for another `Configure`) when the aspect-derived height changes.
+    pub requested_height: u32,
     /// A frame callback fired while the back buffer was still in flight; draw as
     /// soon as its `wl_buffer.release` lands.
     pub pending_frame: bool,
@@ -37,6 +48,7 @@ pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
         .on(on_pre_poll)
         .on(on_registry)
         .on(on_seat)
+        .on(on_output)
         .on(on_callback)
         .on(on_configure)
         .on(on_buffer_release)
@@ -96,6 +108,18 @@ fn on_seat(s: &mut MechanixKeyboardState, event: &WlSeatEvent) {
     }
 }
 
+/// Track the output's buffer-scale factor (HiDPI). Drives the physical buffer
+/// size and `wl_surface.set_buffer_scale` so text stays crisp on a 2× display.
+fn on_output(s: &mut MechanixKeyboardState, event: &WlOutputEvent) {
+    let WlOutputEvent::Scale { factor, .. } = event else {
+        return;
+    };
+    if *factor > 0 {
+        s.scale = *factor;
+        tracing::info!("output buffer-scale: {factor}");
+    }
+}
+
 /// Registry roundtrip done: globals are in, so create the layer surface and
 /// commit it (no buffer yet — that waits for the first `configure`).
 fn create_window(s: &mut MechanixKeyboardState) {
@@ -114,7 +138,7 @@ fn create_window(s: &mut MechanixKeyboardState) {
         ZwlrLayerShellV1Layer::Top,
         "mechanix-keyboard",
     );
-    layer_surface.set_size(0, HEIGHT);
+    layer_surface.set_size(0, INITIAL_HEIGHT);
     layer_surface.set_anchor(
         ZwlrLayerSurfaceV1Anchor::Bottom
             | ZwlrLayerSurfaceV1Anchor::Left
@@ -130,7 +154,10 @@ fn create_window(s: &mut MechanixKeyboardState) {
         slots: None,
         back: 0,
         width: 0,
-        height: HEIGHT,
+        height: 0,
+        logical_width: 0,
+        logical_height: 0,
+        requested_height: INITIAL_HEIGHT,
         pending_frame: false,
     });
 }
@@ -151,13 +178,16 @@ fn on_callback(s: &mut MechanixKeyboardState, event: &WlCallbackEvent) {
     }
 }
 
-/// Compositor sized the surface: ack, allocate slots on the first configure, and
-/// present the first frame (which maps the surface).
+/// Compositor sized the surface. The layer-shell grants the width (we anchor
+/// left+right); we infer the height from it, aspect-locked to the rendered
+/// view. On the first `Configure` the granted height won't match that inference,
+/// so we re-request the derived height and wait for the next `Configure`; once
+/// it matches, we allocate physical-resolution slots and present the first frame.
 fn on_configure(s: &mut MechanixKeyboardState, event: &ZwlrLayerSurfaceV1Event) {
     let ZwlrLayerSurfaceV1Event::Configure {
         serial,
         width,
-        height,
+        height: _,
         ..
     } = event
     else {
@@ -166,29 +196,63 @@ fn on_configure(s: &mut MechanixKeyboardState, event: &ZwlrLayerSurfaceV1Event) 
     let Some(dmabuf) = s.globals.dmabuf.clone() else {
         return;
     };
+    let scale = s.scale.max(1);
 
-    let need_alloc = {
+    // The rendered view's intrinsic logical size drives the aspect ratio.
+    let (view_w, view_h) = {
+        let Some(view) = s.keymap.as_ref().and_then(|km| km.view(RENDER_VIEW)) else {
+            return;
+        };
+        (view.width(), view.height())
+    };
+    if view_w <= 0.0 {
+        return;
+    }
+
+    // Resolve width, ack, and decide whether we still need to re-request height.
+    let ready = {
         let Some(window) = s.window.as_mut() else {
             return;
         };
-        let w = if *width == 0 { window.width } else { *width };
-        let h = if *height == 0 { window.height } else { *height };
         window.layer_surface.ack_configure(*serial);
-        if window.slots.is_none() {
-            window.width = w;
-            window.height = h;
-            true
+
+        let logical_w = if *width == 0 {
+            window.logical_width.max(1)
         } else {
-            false
+            *width
+        };
+        window.logical_width = logical_w;
+
+        let desired_h = (view_h * logical_w as f32 / view_w).round() as u32;
+        if desired_h == 0 {
+            return;
+        }
+
+        if window.requested_height != desired_h {
+            // Ask for the aspect-correct height and wait for the next Configure.
+            window.requested_height = desired_h;
+            window.layer_surface.set_size(0, desired_h);
+            window.surface.commit();
+            None
+        } else {
+            Some((logical_w, desired_h))
         }
     };
+    let Some((logical_w, logical_h)) = ready else {
+        return;
+    };
 
-    if need_alloc {
-        let (w, h) = {
-            let window = s.window.as_ref().expect("window exists");
-            (window.width, window.height)
-        };
-        let slots = render::alloc_slots(&mut s.renderer, &dmabuf, w, h);
+    // Height now matches our request — allocate physical-resolution slots once.
+    if s.window.as_ref().is_some_and(|w| w.slots.is_none()) {
+        let (buf_w, buf_h) = (logical_w * scale as u32, logical_h * scale as u32);
+        {
+            let window = s.window.as_mut().expect("window exists");
+            window.logical_height = logical_h;
+            window.width = buf_w;
+            window.height = buf_h;
+            window.surface.set_buffer_scale(scale);
+        }
+        let slots = render::alloc_slots(&mut s.renderer, &dmabuf, buf_w, buf_h);
         s.window.as_mut().expect("window exists").slots = Some(slots);
     }
 
