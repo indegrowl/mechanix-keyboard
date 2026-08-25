@@ -32,7 +32,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "app"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "app-macro",
  "frunk",
@@ -41,7 +41,7 @@ dependencies = [
 [[package]]
 name = "app-macro"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -63,7 +63,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 [[package]]
 name = "assets"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "anyhow",
  "crunch",
@@ -183,6 +183,16 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "errno"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
 
 [[package]]
 name = "euclid"
@@ -447,7 +457,7 @@ dependencies = [
 [[package]]
 name = "interactivity"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "app",
  "utils",
@@ -457,7 +467,7 @@ dependencies = [
 [[package]]
 name = "io-ring"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "app",
  "io-uring",
@@ -548,6 +558,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e126dda6f34391ab7b444f9922055facc83c07a910da3eb16f1e4d9c45dc777"
 
 [[package]]
+name = "linux-raw-sys"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+
+[[package]]
 name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -571,6 +587,7 @@ dependencies = [
  "interactivity",
  "io-ring",
  "renderer",
+ "rustix",
  "serde",
  "toml",
  "tracing",
@@ -579,6 +596,7 @@ dependencies = [
  "utils",
  "wayland",
  "window-manager",
+ "xkbcommon",
  "yaml_serde",
 ]
 
@@ -733,7 +751,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "renderer"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "anyhow",
  "assets",
@@ -778,6 +796,19 @@ name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
+
+[[package]]
+name = "rustix"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+dependencies = [
+ "bitflags 2.13.1",
+ "errno",
+ "libc",
+ "linux-raw-sys",
+ "windows-sys",
+]
 
 [[package]]
 name = "rustversion"
@@ -1125,7 +1156,7 @@ dependencies = [
 [[package]]
 name = "ui"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "app",
  "assets",
@@ -1138,7 +1169,7 @@ dependencies = [
 [[package]]
 name = "ui-macro"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1217,7 +1248,7 @@ dependencies = [
 [[package]]
 name = "utils"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1283,7 +1314,7 @@ dependencies = [
 [[package]]
 name = "wayland"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "app",
  "bitflags 2.13.1",
@@ -1317,7 +1348,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "window-manager"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#beaf1520b3c869bd07df0aff31bc15aed3ff9d27"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
 dependencies = [
  "anyhow",
  "app",
@@ -1354,6 +1385,23 @@ checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "xkbcommon"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7a974f48060a14e95705c01f24ad9c3345022f4d97441b8a36beb7ed5c4a02d"
+dependencies = [
+ "libc",
+ "memmap2",
+ "xkeysym",
+]
+
+[[package]]
+name = "xkeysym"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xmlwriter"

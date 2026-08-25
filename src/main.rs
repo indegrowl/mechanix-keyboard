@@ -1,5 +1,5 @@
 #![recursion_limit = "1024"]
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Instant};
 
 use app::prelude::*;
 use interactivity::InteractivityState;
@@ -9,6 +9,7 @@ use wayland::*;
 
 mod layout;
 mod render;
+mod virtual_keyboard;
 mod window;
 
 /// The one Keymap view we render this pass. View switching is a later task.
@@ -26,6 +27,8 @@ pub mod icons {
 }
 
 use window::{WaylandGlobals, WindowState};
+
+use crate::virtual_keyboard::VirtualKeyboardState;
 
 #[derive(State)]
 pub struct MechanixKeyboardState {
@@ -51,6 +54,8 @@ pub struct MechanixKeyboardState {
     scale: i32,
     #[lens(skip)]
     last_hover: Option<String>,
+    #[lens(skip)]
+    virtual_keyboard_state: VirtualKeyboardState,
 }
 
 impl MechanixKeyboardState {
@@ -70,6 +75,10 @@ impl MechanixKeyboardState {
             atlas_texture: None,
             scale: 1,
             last_hover: None,
+            virtual_keyboard_state: VirtualKeyboardState {
+                start_time: Instant::now(),
+                keymap: None,
+            },
         }
     }
 }
@@ -88,7 +97,8 @@ fn main() {
         .mount(wayland::module())
         .mount(render::module())
         .mount(window::module())
-        .mount(layout::module());
+        .mount(layout::module())
+        .mount(virtual_keyboard::module());
 
     app.dispatch(&app::Start);
     loop {
