@@ -21,3 +21,5 @@ yaml_serde = "0.10.7"
 
 [build-dependencies]
 assets = { git = "https://github.com/mecha-org/mecha-wayland.git", features = ["builder"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "0.8"

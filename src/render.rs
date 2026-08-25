@@ -1,10 +1,13 @@
 use std::os::fd::AsFd;
 
 use assets::BakedFont;
-use renderer::commands::{ClearColor, Color, DrawRect, DrawText, Point, Size};
+use renderer::commands::{
+    ClearColor, Color, DrawMonochromeSprite, DrawRect, DrawText, Point, Rect, Size,
+};
 use renderer::{DmaBuf, RenderableSurface, Renderer, TextureId};
 use wayland::{Handle, ObjectId, WlBuffer, ZwpLinuxBufferParamsV1Flags, ZwpLinuxDmabufV1};
 
+use crate::layout::KeyFace;
 use crate::{MechanixKeyboardState, RENDER_VIEW, atlas, layout};
 
 /// Background the keyboard bar clears to, behind the keys.
@@ -23,6 +26,10 @@ const KEY_INSET: f32 = 2.0;
 /// z wins, so the label draws over its box.
 const Z_BOX: f32 = 0.10;
 const Z_TEXT: f32 = 0.20;
+
+/// Icon side length as a fraction of the key's inner height. Icons are square and
+/// geometrically centred; expect to tune this once it's visible on the Comet.
+const ICON_SCALE: f32 = 0.5;
 
 /// DRM fourcc for ARGB8888, matching the renderer's DmaBuf format.
 const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241;
@@ -50,8 +57,9 @@ pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
     })
 }
 
-/// Draw one view's keys into the active surface: a filled box per key, its label
-/// centred on top. `buffer_w` is the physical buffer width; the whole view is
+/// Draw one view's keys into the active surface: a filled box per key, its face
+/// (text label or icon) centred on top. `buffer_w` is the physical buffer width;
+/// the whole view is
 /// scaled uniformly to fill it (`k = buffer_w / view_width`), which keeps the
 /// layout's aspect ratio — the bar's height was sized to match (see `window`).
 fn draw_view(renderer: &mut Renderer, view: &layout::View, tex: Option<TextureId>, buffer_w: f32) {
@@ -76,25 +84,46 @@ fn draw_view(renderer: &mut Renderer, view: &layout::View, tex: Option<TextureId
             size: Size::new(bw, bh),
         });
 
-        // Labels outside ASCII 32..126 (Nerd Font / accented glyphs) aren't baked
-        // and `DrawText` skips them — those keys show a box but no label for now.
+        // The face draws over the box. Text still only covers ASCII 32..126 (the
+        // baked font); an icon is a baked sprite tinted with the label colour.
         let Some(tex) = tex else { continue };
-        if key.label.trim().is_empty() {
-            continue;
+        match &key.face {
+            KeyFace::Text(text) => {
+                if text.trim().is_empty() {
+                    continue;
+                }
+                let text_w = FONT.measure_width(text);
+                let tx = bx + (bw - text_w) / 2.0;
+                let baseline = by + FONT.get_baseline_offset(bh);
+                renderer.send_command(DrawText {
+                    font: FONT,
+                    texture_id: tex,
+                    text: text.clone(),
+                    origin: Point::new(tx, baseline),
+                    z: Z_TEXT,
+                    color: KEY_LABEL,
+                    background: KEY_BG,
+                    is_opaque: true,
+                });
+            }
+            KeyFace::Icon(region) => {
+                // Square, sized to a fraction of the key's inner height, centred
+                // on both axes (an icon has no text baseline to sit on).
+                let side = bh * ICON_SCALE;
+                let ix = bx + (bw - side) / 2.0;
+                let iy = by + (bh - side) / 2.0;
+                renderer.send_command(DrawMonochromeSprite {
+                    texture_id: tex,
+                    region: Rect::new(region.x, region.y, region.w, region.h),
+                    origin: Point::new(ix, iy),
+                    z: Z_TEXT,
+                    size: Size::new(side, side),
+                    color: KEY_LABEL,
+                    background: KEY_BG,
+                    is_opaque: true,
+                });
+            }
         }
-        let text_w = FONT.measure_width(&key.label);
-        let tx = bx + (bw - text_w) / 2.0;
-        let baseline = by + FONT.get_baseline_offset(bh);
-        renderer.send_command(DrawText {
-            font: FONT,
-            texture_id: tex,
-            text: key.label.clone(),
-            origin: Point::new(tx, baseline),
-            z: Z_TEXT,
-            color: KEY_LABEL,
-            background: KEY_BG,
-            is_opaque: true,
-        });
     }
 }
 

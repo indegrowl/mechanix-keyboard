@@ -44,7 +44,7 @@ buttons:
                 lock_view: "upper"
                 unlock_view: "base"
         outline: "altline"
-        label: "󰘶"
+        icon: "key-shift-symbolic"
     Ctrl:
         modifier: "Control"
         outline: "action"
@@ -55,7 +55,7 @@ buttons:
         label: "Alt"
     BackSpace:
         outline: "altline"
-        label: "󰭜"
+        icon: "edit-clear-symbolic"
         action: "erase"
     Menu:
         outline: "menu"
@@ -63,7 +63,7 @@ buttons:
     preferences:
         action: "show_prefs"
         outline: "special"
-        label: "󰒓"
+        icon: "preferences-system-symbolic"
     show_letters:
         action:
             set_view: "base"
@@ -87,7 +87,7 @@ buttons:
         text: " "
     Return:
         outline: "altline"
-        label: "󰌑"
+        icon: "key-enter-symbolic"
         keysym: "Return"
     F1:
         outline: "fkey"
@@ -149,12 +149,16 @@ buttons:
     "↑":
         outline: "action"
         keysym: "Up"
+        icon: "go-up-symbolic"
     "↓":
         outline: "action"
         keysym: "Down"
+        icon: "go-down-symbolic"
     "←":
         outline: "action"
         keysym: "Left"
+        icon: "go-previous-symbolic"
     "→":
         outline: "action"
         keysym: "Right"
+        icon: "go-next-symbolic"

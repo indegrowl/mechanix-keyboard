@@ -572,6 +572,7 @@ dependencies = [
  "io-ring",
  "renderer",
  "serde",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "ui",

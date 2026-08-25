@@ -1,16 +1,17 @@
+use assets::SpriteRegion;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::{env, fs};
 use tracing::{info, warn};
 use utils::Rect;
 
-use crate::MechanixKeyboardState;
+use crate::{MechanixKeyboardState, icons};
 
 // ── Squeekboard-format parse ────────────────────────────────────────────────
 //
 // The raw shape of a squeekboard `.yaml` layout. We only pull out what a
-// render-only IR needs: outline sizes, view rows, and each button's outline +
-// label. `action`/`keysym`/`modifier`/`text`/`icon` are deserialized-over —
+// render-only IR needs: outline sizes, view rows, and each button's outline,
+// label + icon. `action`/`keysym`/`modifier`/`text` are deserialized-over —
 // serde ignores fields we don't name — and belong to the deferred action model.
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +32,7 @@ struct Outline {
 struct Button {
     outline: Option<String>,
     label: Option<String>,
+    icon: Option<String>,
 }
 
 /// Size used when a button names an outline that isn't defined (and no
@@ -58,12 +60,33 @@ pub struct Row {
     pub keys: Vec<Key>,
 }
 
+/// What a key draws in its cell: a text label *or* a symbolic icon, never both.
+/// Resolved at IR-build time — the icon is already its baked atlas sprite region,
+/// so the renderer does no per-frame lookup.
+#[derive(Debug, Clone)]
+pub enum KeyFace {
+    Text(String),
+    Icon(SpriteRegion),
+}
+
 /// One drawable key: what to draw, and where (logical units).
 #[derive(Debug)]
 pub struct Key {
-    pub label: String,
+    pub face: KeyFace,
     pub rect: Rect,
     pub touch_area: Rect,
+}
+
+impl Key {
+    /// A human-readable label for bring-up tracing (hover/tap). Icon keys have no
+    /// text — and we dropped their name when resolving to a region — so they log
+    /// as `[icon]`.
+    pub fn display_label(&self) -> &str {
+        match &self.face {
+            KeyFace::Text(s) => s,
+            KeyFace::Icon(_) => "[icon]",
+        }
+    }
 }
 
 impl Row {
@@ -116,23 +139,21 @@ impl Keymap {
 impl View {
     /// Resolve one view's rows into laid-out keys.
     ///
-    /// Two passes: first size every key (label + outline), then flow them.
+    /// Two passes: first resolve every key's face + outline, then flow them.
     /// Keys butt together left-to-right with no gap; each row's height is the
     /// max key height in it; rows stack top-down; and each row is centred
     /// within the view's width (the widest row), matching squeekboard's look.
     fn resolve(layout: &Layout, name: &str, rows: &[String]) -> View {
-        // Pass 1: resolve label + size for every key, grouped by row.
-        let sized: Vec<Vec<(String, Outline)>> = rows
+        // Pass 1: resolve face + size for every key, grouped by row.
+        let sized: Vec<Vec<(KeyFace, Outline)>> = rows
             .iter()
             .map(|row| {
                 row.split_whitespace()
                     .map(|token| {
                         let button = layout.buttons.get(token);
                         let outline = resolve_outline(layout, button);
-                        let label = button
-                            .and_then(|b| b.label.clone())
-                            .unwrap_or_else(|| token.to_string());
-                        (label, outline)
+                        let face = resolve_face(token, button);
+                        (face, outline)
                     })
                     .collect()
             })
@@ -153,10 +174,10 @@ impl View {
             let mut x = (view_width - row_width) / 2.0;
             let keys = row
                 .iter()
-                .map(|(label, o)| {
+                .map(|(face, o)| {
                     let rect = Rect::new(x, y, o.width, o.height);
                     let key = Key {
-                        label: label.clone(),
+                        face: face.clone(),
                         rect,
                         touch_area: rect,
                     };
@@ -173,6 +194,29 @@ impl View {
             rows: out_rows,
         }
     }
+}
+
+/// Resolve a button token's face. Icon wins over label when both are set
+/// (matching squeekboard) — and warns. An icon name absent from the dictionary
+/// warns and falls back to an empty text face, so the key draws its box but no
+/// glyph. With neither icon nor label, the button's own name is the label.
+fn resolve_face(token: &str, button: Option<&Button>) -> KeyFace {
+    if let Some(icon) = button.and_then(|b| b.icon.as_deref()) {
+        if button.and_then(|b| b.label.as_deref()).is_some() {
+            warn!("button {token:?} sets both `icon` and `label`; using icon {icon:?}");
+        }
+        return match icons::icon_region(icon) {
+            Some(region) => KeyFace::Icon(region),
+            None => {
+                warn!("icon {icon:?} not in the icon dictionary; drawing empty key");
+                KeyFace::Text(String::new())
+            }
+        };
+    }
+    let label = button
+        .and_then(|b| b.label.clone())
+        .unwrap_or_else(|| token.to_string());
+    KeyFace::Text(label)
 }
 
 /// Resolve a button's outline size: the button's named outline, else the

@@ -341,7 +341,7 @@ fn on_touch(s: &mut MechanixKeyboardState, event: &WlTouchEvent) {
     // touch area for a tap that landed and completed this frame.
     for key in view.keys() {
         if s.interactivity.touch.tapped(scale_rect(key.touch_area, f)) {
-            tracing::info!(key = %key.label, "tapped");
+            tracing::info!(key = %key.display_label(), "tapped");
             break;
         }
     }
@@ -364,7 +364,7 @@ fn view_and_factor(s: &MechanixKeyboardState) -> Option<(&View, f32)> {
 fn key_at(view: &View, f: f32, p: Point) -> Option<String> {
     view.keys()
         .find(|k| scale_rect(k.touch_area, f).contains_point(p))
-        .map(|k| k.label.clone())
+        .map(|k| k.display_label().to_string())
 }
 
 /// Scale a layout-unit rect into surface-local coordinates.

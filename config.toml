@@ -1,0 +1,44 @@
+[[font]]
+name  = "roboto"
+path  = "resources/RobotoMono-Regular.ttf"
+sizes = [64]
+
+[[icon]]
+name = "key-shift-symbolic"
+path = "resources/icons/key-shift-symbolic.svg"
+size = 48
+
+[[icon]]
+name = "edit-clear-symbolic"
+path = "resources/icons/edit-clear-symbolic.svg"
+size = 48
+
+[[icon]]
+name = "key-enter-symbolic"
+path = "resources/icons/key-enter-symbolic.svg"
+size = 48
+
+[[icon]]
+name = "preferences-system-symbolic"
+path = "resources/icons/preferences-system-symbolic.svg"
+size = 48
+
+[[icon]]
+name = "go-up-symbolic"
+path = "resources/icons/go-up-symbolic.svg"
+size = 48
+
+[[icon]]
+name = "go-down-symbolic"
+path = "resources/icons/go-down-symbolic.svg"
+size = 48
+
+[[icon]]
+name = "go-previous-symbolic"
+path = "resources/icons/go-previous-symbolic.svg"
+size = 48
+
+[[icon]]
+name = "go-next-symbolic"
+path = "resources/icons/go-next-symbolic.svg"
+size = 48

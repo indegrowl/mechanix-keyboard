@@ -19,6 +19,12 @@ pub mod atlas {
     include!(concat!(env!("OUT_DIR"), "/keyboard_gen.rs"));
 }
 
+/// The icon dictionary — `icon name -> SpriteRegion` — generated at build time
+/// from `config.toml`. References the sprite consts in `atlas`.
+pub mod icons {
+    include!(concat!(env!("OUT_DIR"), "/icons_gen.rs"));
+}
+
 use window::{WaylandGlobals, WindowState};
 
 #[derive(State)]

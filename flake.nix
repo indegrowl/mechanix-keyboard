@@ -41,15 +41,15 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain buildToolchain;
 
-        # cleanCargoSource keeps only Rust/Cargo sources, which drops the
-        # runtime assets baked in at build time: build.rs reads atlas.toml and
-        # resources/RobotoMono-Regular.ttf, and layout.rs include_str!s
-        # resources/layout.yaml. Add resources/ (and atlas.toml) back in.
+        # cleanCargoSource keeps only Rust/Cargo sources, which drops the assets
+        # baked in at build time: build.rs reads config.toml and the fonts/SVGs
+        # under resources/ it names, and layout.rs include_str!s
+        # resources/layout.yaml. Add config.toml and resources/ back in.
         src = lib.fileset.toSource {
           root = ./.;
           fileset = lib.fileset.unions [
             (craneLib.fileset.commonCargoSources ./.)
-            ./atlas.toml
+            ./config.toml
             ./resources
           ];
         };
