@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
 use std::time::Instant;
 
@@ -6,9 +7,10 @@ use rustix::io;
 use rustix::mm::{MapFlags, ProtFlags, mmap, munmap};
 use wayland::{WlKeyboardKeyState, WlKeyboardKeymapFormat};
 use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
-use xkbcommon::xkb::{Context, Keymap};
+use xkbcommon::xkb::{self, Context, Keycode, Keymap, Keysym};
 
 use crate::MechanixKeyboardState;
+use crate::layout::KeyAction;
 
 pub struct KeymapWithFd {
     fd: OwnedFd,
@@ -20,35 +22,42 @@ impl KeymapWithFd {
         let (fd, size) = make_keymap_fd(text)?;
         Ok(Self { fd, size })
     }
-    // No manual Drop impl needed — OwnedFd closes the fd when `KeymapWithFd` drops.
 }
 
 pub struct VirtualKeyboardState {
     pub start_time: Instant,
     pub keymap: Option<KeymapWithFd>,
+    /// keysym → evdev keycode, scanned from the uploaded keymap's base level.
+    /// Empty until the keymap is sent; emission is a no-op until then.
+    pub keycodes: HashMap<Keysym, u32>,
 }
 
-/// zwp_virtual_keyboard_v1
-///
-/// Minimal client: once the registry roundtrip has bound the seat and the
-/// virtual-keyboard manager, create a virtual keyboard and hand the compositor
-/// a standard keymap.
+impl VirtualKeyboardState {
+    pub fn new() -> Self {
+        Self {
+            start_time: Instant::now(),
+            keymap: None,
+            keycodes: HashMap::new(),
+        }
+    }
+}
+
 pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
     app::Module::new().on(on_pre_poll)
 }
 
 /// The seat/manager are only known after the registry roundtrip, so create the
-/// virtual keyboard lazily on the first poll where both are available.
+/// virtual keyboard lazily on the first poll where both are available. Once it
+/// exists there's nothing to do here — tapping a key drives emission directly.
 fn on_pre_poll(s: &mut MechanixKeyboardState, _: &app::PrePoll) {
     if s.globals.virtual_keyboard.is_some() {
-        send_test_key(s);
         return;
     }
     let (Some(seat), Some(manager)) = (
         s.globals.seat.clone(),
         s.globals.virtual_keyboard_manager.clone(),
     ) else {
-        tracing::warn!("No vkbd manager found!");
+        // Not advertised yet; try again next poll (no log — this fires every poll).
         return;
     };
 
@@ -58,8 +67,13 @@ fn on_pre_poll(s: &mut MechanixKeyboardState, _: &app::PrePoll) {
     let ctx = Context::new(0);
     let keymap = Keymap::new_from_names(&ctx, "", "", "us", "", None, 0)
         .expect("failed to compile default keymap");
-    let text = keymap.get_as_string(XKB_KEYMAP_FORMAT_TEXT_V1);
 
+    // Index the keymap's base level (layout 0, level 0) so a tapped keysym maps
+    // to the evdev keycode to send. `evdev = xkb_keycode - 8`; first key wins for
+    // a keysym that appears on more than one physical key.
+    let keycodes = scan_keycodes(&keymap);
+
+    let text = keymap.get_as_string(XKB_KEYMAP_FORMAT_TEXT_V1);
     let keymap_fd = match KeymapWithFd::new(text.as_bytes()) {
         Ok(keymap) => keymap,
         Err(err) => {
@@ -74,9 +88,61 @@ fn on_pre_poll(s: &mut MechanixKeyboardState, _: &app::PrePoll) {
         keymap_fd.size,
     );
 
+    tracing::info!(mapped = keycodes.len(), "virtual keyboard ready");
     s.globals.virtual_keyboard = Some(vkbd);
     s.virtual_keyboard_state.keymap = Some(keymap_fd);
-    tracing::info!("sent keymap to virtual keyboard");
+    s.virtual_keyboard_state.keycodes = keycodes;
+}
+
+/// Build the `keysym → evdev keycode` map from a compiled keymap's base level.
+fn scan_keycodes(keymap: &Keymap) -> HashMap<Keysym, u32> {
+    let mut map = HashMap::new();
+    for kc in keymap.min_keycode().raw()..=keymap.max_keycode().raw() {
+        if kc < 8 {
+            continue;
+        }
+        let syms = keymap.key_get_syms_by_level(Keycode::new(kc), 0, 0);
+        if let Some(ks) = syms.first().copied()
+            && ks.raw() != 0
+        {
+            map.entry(ks).or_insert(kc - 8);
+        }
+    }
+    map
+}
+
+/// Emit a Key action over the virtual keyboard: a keysym (or each char of a text
+/// run) becomes a keycode down+up; unwired actions just log.
+pub fn emit_action(s: &mut MechanixKeyboardState, action: &KeyAction) {
+    match action {
+        KeyAction::EmitKeysym(ks) => emit_keysym(s, *ks),
+        KeyAction::EmitText(text) => {
+            for ch in text.chars() {
+                emit_keysym(s, Keysym::from_char(ch));
+            }
+        }
+        KeyAction::Unhandled(name) => {
+            tracing::info!(action = %name, "tapped key with no wired action");
+        }
+    }
+}
+
+/// Send one keysym as a keycode down+up. No-ops (with a log) if the keysym isn't
+/// in the uploaded keymap or the keyboard isn't ready yet.
+fn emit_keysym(s: &mut MechanixKeyboardState, ks: Keysym) {
+    let name = xkb::keysym_get_name(ks);
+    let Some(&code) = s.virtual_keyboard_state.keycodes.get(&ks) else {
+        tracing::warn!(keysym = %name, "keysym absent from keymap; not typed");
+        return;
+    };
+    let Some(vkbd) = s.globals.virtual_keyboard.clone() else {
+        tracing::warn!(keysym = %name, "virtual keyboard not ready; key dropped");
+        return;
+    };
+    let time = (Instant::now() - s.virtual_keyboard_state.start_time).as_millis() as u32;
+    vkbd.key(time, code, WlKeyboardKeyState::Pressed.into());
+    vkbd.key(time, code, WlKeyboardKeyState::Released.into());
+    tracing::info!(keysym = %name, code, "typed");
 }
 
 /// Builds a sealed, shared memfd holding `text` as a NUL-terminated
@@ -132,37 +198,4 @@ pub fn make_keymap_fd(text: &[u8]) -> io::Result<(OwnedFd, u32)> {
     )?;
 
     Ok((fd, size as u32))
-}
-
-fn send_test_key(s: &mut MechanixKeyboardState) {
-    if s.interactivity
-        .pointer
-        .pressed(interactivity::pointer::MouseButton::Left)
-    {
-        if let Some(vkbd) = s.globals.virtual_keyboard.clone() {
-            let key = 30;
-            let state = WlKeyboardKeyState::Pressed;
-            vkbd.key(
-                (Instant::now() - s.virtual_keyboard_state.start_time).as_millis() as u32,
-                key,
-                state.into(),
-            );
-            tracing::info!("Sending key...");
-        }
-    } else if s
-        .interactivity
-        .pointer
-        .just_released(interactivity::pointer::MouseButton::Left)
-    {
-        if let Some(vkbd) = s.globals.virtual_keyboard.clone() {
-            let key = 65;
-            let state = WlKeyboardKeyState::Released;
-            vkbd.key(
-                (Instant::now() - s.virtual_keyboard_state.start_time).as_millis() as u32,
-                key,
-                state.into(),
-            );
-            tracing::info!("Releasing key...");
-        }
-    }
 }

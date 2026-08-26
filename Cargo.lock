@@ -32,7 +32,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "app"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "app-macro",
  "frunk",
@@ -41,7 +41,7 @@ dependencies = [
 [[package]]
 name = "app-macro"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -63,7 +63,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 [[package]]
 name = "assets"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "anyhow",
  "crunch",
@@ -457,7 +457,7 @@ dependencies = [
 [[package]]
 name = "interactivity"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "app",
  "utils",
@@ -467,7 +467,7 @@ dependencies = [
 [[package]]
 name = "io-ring"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "app",
  "io-uring",
@@ -751,7 +751,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "renderer"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "anyhow",
  "assets",
@@ -1156,7 +1156,7 @@ dependencies = [
 [[package]]
 name = "ui"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "app",
  "assets",
@@ -1169,7 +1169,7 @@ dependencies = [
 [[package]]
 name = "ui-macro"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1248,7 +1248,7 @@ dependencies = [
 [[package]]
 name = "utils"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1314,7 +1314,7 @@ dependencies = [
 [[package]]
 name = "wayland"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "app",
  "bitflags 2.13.1",
@@ -1348,7 +1348,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "window-manager"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f00b74e3828e058e7bdc3559782814238293a232"
+source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
 dependencies = [
  "anyhow",
  "app",

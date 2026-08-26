@@ -198,7 +198,7 @@ pub fn render(s: &mut MechanixKeyboardState) {
     }
     // Physical buffer dims for scissor/scaling; logical dims for surface damage
     // (damage is in surface-local coordinates, which are pre-buffer-scale).
-    let buffer_w = window.width;
+    let buffer_w = window.physical_width;
     let (lw, lh) = (window.logical_width, window.logical_height);
 
     s.renderer.active_surface(&slots[back].surface);

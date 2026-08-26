@@ -72,13 +72,14 @@
 
           PKG_CONFIG_ALLOW_CROSS = "1";
           PKG_CONFIG_PATH = lib.makeSearchPathOutput "dev" "lib/pkgconfig"
-            (with pkgsCross; [ libgbm libdrm ]);
+            (with pkgsCross; [ libgbm libdrm libxkbcommon ]);
 
           # libEGL/libGLESv2 are dlopen'd at runtime (khronos-egl `dynamic`
-          # mode), so the only build-time cross link dep is libgbm, which pulls
-          # libdrm through pkg-config.
+          # mode). Build-time cross link deps: libgbm (pulls libdrm via
+          # pkg-config) and libxkbcommon (the `xkbcommon` crate links it
+          # directly with `#[link(name = "xkbcommon")]`).
           nativeBuildInputs = with pkgs; [ pkg-config clang pkgsCross.stdenv.cc ];
-          buildInputs       = with pkgsCross; [ libgbm libdrm ];
+          buildInputs       = with pkgsCross; [ libgbm libdrm libxkbcommon ];
         };
 
         keyboardAarch64 = craneLib.buildPackage (crossArgs // {

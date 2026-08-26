@@ -2,9 +2,9 @@ use interactivity::pointer::MouseButton;
 use utils::{Point, Rect};
 use wayland::*;
 
-use crate::layout::View;
+use crate::layout::{KeyAction, View};
 use crate::render;
-use crate::{MechanixKeyboardState, RENDER_VIEW};
+use crate::{MechanixKeyboardState, RENDER_VIEW, virtual_keyboard};
 
 /// Placeholder height requested before the first `Configure` reveals the width.
 /// The real height is derived from the granted width (aspect-locked) and
@@ -30,11 +30,9 @@ pub struct WindowState {
     pub layer_surface: Handle<ZwlrLayerSurfaceV1>,
     pub slots: Option<[render::Slot; 2]>,
     pub back: usize,
-    /// Physical buffer dimensions (logical × buffer-scale) — what the dmabuf and
-    /// GL viewport are sized to.
-    pub width: u32,
-    pub height: u32,
-    /// Surface-logical dimensions (pre-buffer-scale), used for surface damage.
+    pub physical_width: u32,
+    pub physical_height: u32,
+
     pub logical_width: u32,
     pub logical_height: u32,
     /// The logical height we last asked the compositor for, so we only re-request
@@ -43,23 +41,6 @@ pub struct WindowState {
     /// A frame callback fired while the back buffer was still in flight; draw as
     /// soon as its `wl_buffer.release` lands.
     pub pending_frame: bool,
-}
-
-/// The window + input module: registry/seat binding, layer-surface lifecycle,
-/// and seat input into the interactivity crate.
-pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
-    app::Module::new()
-        .on(on_start)
-        .on(on_pre_poll)
-        .on(on_registry)
-        .on(on_seat)
-        .on(on_output)
-        .on(on_callback)
-        .on(on_configure)
-        .on(on_buffer_release)
-        .on(on_keyboard)
-        .on(on_pointer)
-        .on(on_touch)
 }
 
 /// Kick off the registry roundtrip that discovers the globals.
@@ -161,8 +142,8 @@ fn create_window(s: &mut MechanixKeyboardState) {
         layer_surface,
         slots: None,
         back: 0,
-        width: 0,
-        height: 0,
+        physical_width: 0,
+        physical_height: 0,
         logical_width: 0,
         logical_height: 0,
         requested_height: INITIAL_HEIGHT,
@@ -256,8 +237,8 @@ fn on_configure(s: &mut MechanixKeyboardState, event: &ZwlrLayerSurfaceV1Event) 
         {
             let window = s.window.as_mut().expect("window exists");
             window.logical_height = logical_h;
-            window.width = buf_w;
-            window.height = buf_h;
+            window.physical_width = buf_w;
+            window.physical_height = buf_h;
             window.surface.set_buffer_scale(scale);
         }
         let slots = render::alloc_slots(&mut s.renderer, &dmabuf, buf_w, buf_h);
@@ -312,25 +293,29 @@ fn on_pointer(s: &mut MechanixKeyboardState, event: &WlPointerEvent) {
         .just_pressed_position(MouseButton::Left)
         .copied();
 
-    let Some((view, f)) = view_and_factor(s) else {
-        return;
+    // Resolve the hover label and the clicked key's action while the keymap is
+    // borrowed, then act after the borrow ends (emitting needs `&mut s`).
+    let (hover, clicked) = {
+        let Some((view, f)) = view_and_factor(s) else {
+            return;
+        };
+        let hover = key_at(view, f, position);
+        let clicked = pressed.and_then(|p| action_at(view, f, p));
+        (hover, clicked)
     };
 
-    // Click: which key the left button went down on this frame.
-    if let Some(p) = pressed
-        && let Some(label) = key_at(view, f, p)
-    {
-        tracing::info!(key = %label, "clicked");
+    // Click: type the key the left button went down on this frame.
+    if let Some(action) = clicked {
+        virtual_keyboard::emit_action(s, &action);
     }
 
     // Hover: print only when the key under the pointer changes.
-    let now = key_at(view, f, position);
-    if now != s.last_hover {
-        match &now {
+    if hover != s.last_hover {
+        match &hover {
             Some(label) => tracing::info!(key = %label, "hover"),
             None => tracing::info!("hover: none"),
         }
-        s.last_hover = now;
+        s.last_hover = hover;
     }
 }
 
@@ -338,17 +323,20 @@ fn on_touch(s: &mut MechanixKeyboardState, event: &WlTouchEvent) {
     s.interactivity.call_before_frame();
     s.interactivity.process_touch(event);
 
-    let Some((view, f)) = view_and_factor(s) else {
-        return;
+    // Probe each key's touch area for a tap that landed and completed this frame,
+    // cloning the tapped key's action out so the keymap borrow ends before we
+    // emit (which needs `&mut s`).
+    let tapped = {
+        let Some((view, f)) = view_and_factor(s) else {
+            return;
+        };
+        view.keys()
+            .find(|key| s.interactivity.touch.tapped(scale_rect(key.touch_area, f)))
+            .map(|key| key.action.clone())
     };
 
-    // Touch exposes no tap-point, only `tapped(rect)`, so probe each key's
-    // touch area for a tap that landed and completed this frame.
-    for key in view.keys() {
-        if s.interactivity.touch.tapped(scale_rect(key.touch_area, f)) {
-            tracing::info!(key = %key.display_label(), "tapped");
-            break;
-        }
+    if let Some(action) = tapped {
+        virtual_keyboard::emit_action(s, &action);
     }
 }
 
@@ -372,7 +360,29 @@ fn key_at(view: &View, f: f32, p: Point) -> Option<String> {
         .map(|k| k.display_label().to_string())
 }
 
+/// Action of the first key whose (scaled) touch area contains `p`, cloned.
+fn action_at(view: &View, f: f32, p: Point) -> Option<KeyAction> {
+    view.keys()
+        .find(|k| scale_rect(k.touch_area, f).contains_point(p))
+        .map(|k| k.action.clone())
+}
+
 /// Scale a layout-unit rect into surface-local coordinates.
 fn scale_rect(r: Rect, f: f32) -> Rect {
     Rect::new(r.x() * f, r.y() * f, r.width() * f, r.height() * f)
+}
+
+pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
+    app::Module::new()
+        .on(on_start)
+        .on(on_pre_poll)
+        .on(on_registry)
+        .on(on_seat)
+        .on(on_output)
+        .on(on_callback)
+        .on(on_configure)
+        .on(on_buffer_release)
+        .on(on_keyboard)
+        .on(on_pointer)
+        .on(on_touch)
 }

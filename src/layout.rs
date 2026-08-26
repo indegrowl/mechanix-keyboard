@@ -4,15 +4,9 @@ use std::collections::BTreeMap;
 use std::{env, fs};
 use tracing::{info, warn};
 use utils::Rect;
+use xkbcommon::xkb::{self, Keysym};
 
 use crate::{MechanixKeyboardState, icons};
-
-// ── Squeekboard-format parse ────────────────────────────────────────────────
-//
-// The raw shape of a squeekboard `.yaml` layout. We only pull out what a
-// render-only IR needs: outline sizes, view rows, and each button's outline,
-// label + icon. `action`/`keysym`/`modifier`/`text` are deserialized-over —
-// serde ignores fields we don't name — and belong to the deferred action model.
 
 #[derive(Debug, Deserialize)]
 struct Layout {
@@ -28,11 +22,28 @@ struct Outline {
     height: f32,
 }
 
+/// A squeekboard button's `action:` value — either a bare name (`erase`,
+/// `show_prefs`) or a structured map (`set_view`, `locking`). Only `erase` is
+/// wired this pass; the structured arm is deliberately opaque (matched but not
+/// inspected), so every other action resolves to `Unhandled`.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ActionSpec {
+    Named(String),
+    Structured(serde::de::IgnoredAny),
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct Button {
     outline: Option<String>,
     label: Option<String>,
     icon: Option<String>,
+    /// Emit fields the Key action resolves from; see `resolve_action`.
+    keysym: Option<String>,
+    text: Option<String>,
+    #[serde(default)]
+    action: Option<ActionSpec>,
+    modifier: Option<String>,
 }
 
 /// Size used when a button names an outline that isn't defined (and no
@@ -69,10 +80,26 @@ pub enum KeyFace {
     Icon(SpriteRegion),
 }
 
-/// One drawable key: what to draw, and where (logical units).
+/// What a Key *does* when activated — the behavioural counterpart to `KeyFace`.
+/// Resolved at IR-build time from a squeekboard button's `keysym`/`text`/`action`
+/// fields.
+#[derive(Debug, Clone)]
+pub enum KeyAction {
+    /// Emit a single resolved xkb keysym (letters, digits, Return, BackSpace…).
+    EmitKeysym(Keysym),
+    /// Emit literal text, one keysym per char (e.g. the space key's `" "`).
+    EmitText(String),
+    /// A squeekboard action not wired this pass (view switches, modifiers,
+    /// prefs). The key still draws and hit-tests; tapping it logs but types
+    /// nothing. Carries a name for that log.
+    Unhandled(String),
+}
+
+/// One drawable key: what to draw, what it does, and where (logical units).
 #[derive(Debug)]
 pub struct Key {
     pub face: KeyFace,
+    pub action: KeyAction,
     pub rect: Rect,
     pub touch_area: Rect,
 }
@@ -144,8 +171,8 @@ impl View {
     /// max key height in it; rows stack top-down; and each row is centred
     /// within the view's width (the widest row), matching squeekboard's look.
     fn resolve(layout: &Layout, name: &str, rows: &[String]) -> View {
-        // Pass 1: resolve face + size for every key, grouped by row.
-        let sized: Vec<Vec<(KeyFace, Outline)>> = rows
+        // Pass 1: resolve face + action + size for every key, grouped by row.
+        let sized: Vec<Vec<(KeyFace, KeyAction, Outline)>> = rows
             .iter()
             .map(|row| {
                 row.split_whitespace()
@@ -153,7 +180,8 @@ impl View {
                         let button = layout.buttons.get(token);
                         let outline = resolve_outline(layout, button);
                         let face = resolve_face(token, button);
-                        (face, outline)
+                        let action = resolve_action(token, button);
+                        (face, action, outline)
                     })
                     .collect()
             })
@@ -162,22 +190,23 @@ impl View {
         // The view is as wide as its widest row.
         let view_width = sized
             .iter()
-            .map(|row| row.iter().map(|(_, o)| o.width).sum::<f32>())
+            .map(|row| row.iter().map(|(_, _, o)| o.width).sum::<f32>())
             .fold(0.0_f32, f32::max);
 
         // Pass 2: flow each row, centred, stacking downward.
         let mut y = 0.0_f32;
         let mut out_rows = Vec::with_capacity(sized.len());
         for row in &sized {
-            let row_width: f32 = row.iter().map(|(_, o)| o.width).sum();
-            let row_height = row.iter().map(|(_, o)| o.height).fold(0.0_f32, f32::max);
+            let row_width: f32 = row.iter().map(|(_, _, o)| o.width).sum();
+            let row_height = row.iter().map(|(_, _, o)| o.height).fold(0.0_f32, f32::max);
             let mut x = (view_width - row_width) / 2.0;
             let keys = row
                 .iter()
-                .map(|(face, o)| {
+                .map(|(face, action, o)| {
                     let rect = Rect::new(x, y, o.width, o.height);
                     let key = Key {
                         face: face.clone(),
+                        action: action.clone(),
                         rect,
                         touch_area: rect,
                     };
@@ -217,6 +246,60 @@ fn resolve_face(token: &str, button: Option<&Button>) -> KeyFace {
         .and_then(|b| b.label.clone())
         .unwrap_or_else(|| token.to_string());
     KeyFace::Text(label)
+}
+
+/// Resolve a button token's Key action — what it emits when tapped. Priority:
+/// explicit `keysym:` → `action: erase` (→ BackSpace) → `text:` → a single-char
+/// token/label (→ its keysym). A `modifier`, a structured/other `action`, or a
+/// multi-char label with no keysym all resolve to `Unhandled` this pass.
+fn resolve_action(token: &str, button: Option<&Button>) -> KeyAction {
+    if let Some(b) = button {
+        if let Some(name) = b.keysym.as_deref() {
+            let ks = xkb::keysym_from_name(name, xkb::KEYSYM_NO_FLAGS);
+            if ks.raw() != 0 {
+                return KeyAction::EmitKeysym(ks);
+            }
+            warn!("keysym {name:?} on button {token:?} is unknown; key won't type");
+            return KeyAction::Unhandled(token.to_string());
+        }
+        match &b.action {
+            Some(ActionSpec::Named(a)) if a == "erase" => {
+                return KeyAction::EmitKeysym(xkb::keysym_from_name(
+                    "BackSpace",
+                    xkb::KEYSYM_NO_FLAGS,
+                ));
+            }
+            Some(ActionSpec::Named(a)) => return KeyAction::Unhandled(a.clone()),
+            Some(ActionSpec::Structured(_)) => return KeyAction::Unhandled(token.to_string()),
+            None => {}
+        }
+        if b.modifier.is_some() {
+            return KeyAction::Unhandled(token.to_string());
+        }
+        if let Some(text) = &b.text {
+            return KeyAction::EmitText(text.clone());
+        }
+        if let Some(ks) = b.label.as_deref().and_then(single_char_keysym) {
+            return KeyAction::EmitKeysym(ks);
+        }
+    }
+    // No button entry (or nothing above matched): a single-char token is itself
+    // the keysym — this covers every plain letter/digit/punctuation key.
+    if let Some(ks) = single_char_keysym(token) {
+        return KeyAction::EmitKeysym(ks);
+    }
+    KeyAction::Unhandled(token.to_string())
+}
+
+/// The keysym for a single-character string, or `None` if `s` isn't exactly one
+/// char or that char has no keysym.
+fn single_char_keysym(s: &str) -> Option<Keysym> {
+    let mut chars = s.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        return None;
+    };
+    let ks = Keysym::from_char(c);
+    (ks.raw() != 0).then_some(ks)
 }
 
 /// Resolve a button's outline size: the button's named outline, else the
@@ -265,4 +348,92 @@ pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
 
         s.keymap = Some(keymap);
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `Button` with only the fields a test cares about set.
+    fn button(f: impl FnOnce(&mut Button)) -> Button {
+        let mut b = Button::default();
+        f(&mut b);
+        b
+    }
+
+    #[test]
+    fn plain_char_token_resolves_to_its_keysym() {
+        for tok in ["q", "1", ",", "."] {
+            let c = tok.chars().next().unwrap();
+            assert!(
+                matches!(resolve_action(tok, None), KeyAction::EmitKeysym(ks) if ks == Keysym::from_char(c)),
+                "token {tok:?} should emit its own keysym",
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_keysym_field_wins() {
+        let b = button(|b| b.keysym = Some("Return".into()));
+        let want = xkb::keysym_from_name("Return", xkb::KEYSYM_NO_FLAGS);
+        assert!(
+            matches!(resolve_action("Return", Some(&b)), KeyAction::EmitKeysym(ks) if ks == want)
+        );
+    }
+
+    #[test]
+    fn erase_action_maps_to_backspace() {
+        let b = button(|b| b.action = Some(ActionSpec::Named("erase".into())));
+        let want = xkb::keysym_from_name("BackSpace", xkb::KEYSYM_NO_FLAGS);
+        assert!(
+            matches!(resolve_action("BackSpace", Some(&b)), KeyAction::EmitKeysym(ks) if ks == want)
+        );
+    }
+
+    #[test]
+    fn text_field_resolves_to_emit_text() {
+        let b = button(|b| b.text = Some(" ".into()));
+        assert!(matches!(resolve_action("space", Some(&b)), KeyAction::EmitText(t) if t == " "));
+    }
+
+    #[test]
+    fn deferred_actions_are_unhandled() {
+        // Structured action (set_view / locking), a bare non-erase action, and a
+        // modifier all defer this pass — none should type.
+        let structured = button(|b| b.action = Some(ActionSpec::Structured(serde::de::IgnoredAny)));
+        assert!(matches!(
+            resolve_action("show_symbols", Some(&structured)),
+            KeyAction::Unhandled(_)
+        ));
+
+        let prefs = button(|b| b.action = Some(ActionSpec::Named("show_prefs".into())));
+        assert!(matches!(
+            resolve_action("preferences", Some(&prefs)),
+            KeyAction::Unhandled(_)
+        ));
+
+        let modifier = button(|b| b.modifier = Some("Control".into()));
+        assert!(matches!(
+            resolve_action("Ctrl", Some(&modifier)),
+            KeyAction::Unhandled(_)
+        ));
+    }
+
+    #[test]
+    fn fallback_layout_base_view_has_expected_actions() {
+        let layout: Layout = yaml_serde::from_str(FALLBACK_LAYOUT).expect("fallback parses");
+        let keymap = Keymap::from_layout(&layout);
+        let base = keymap.view("base").expect("base view exists");
+
+        // Every base-view key resolves to *some* action, and the ones that type
+        // are keysym/text — no base key is left ambiguous.
+        let typeable = base
+            .keys()
+            .filter(|k| matches!(k.action, KeyAction::EmitKeysym(_) | KeyAction::EmitText(_)))
+            .count();
+        assert!(
+            typeable >= 40,
+            "base view should have many typeable keys, got {typeable}"
+        );
+    }
 }

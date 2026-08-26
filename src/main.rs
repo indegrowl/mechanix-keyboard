@@ -1,5 +1,8 @@
 #![recursion_limit = "1024"]
-use std::{collections::HashSet, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
 use app::prelude::*;
 use interactivity::InteractivityState;
@@ -75,10 +78,7 @@ impl MechanixKeyboardState {
             atlas_texture: None,
             scale: 1,
             last_hover: None,
-            virtual_keyboard_state: VirtualKeyboardState {
-                start_time: Instant::now(),
-                keymap: None,
-            },
+            virtual_keyboard_state: VirtualKeyboardState::new(),
         }
     }
 }
