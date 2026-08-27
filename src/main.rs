@@ -15,8 +15,9 @@ mod render;
 mod virtual_keyboard;
 mod window;
 
-/// The one Keymap view we render this pass. View switching is a later task.
-pub const RENDER_VIEW: &str = "base";
+/// The Keymap view shown when the keyboard first appears. The current view then
+/// changes at runtime as view-switch keys are tapped; see `current_view`.
+pub const INITIAL_VIEW: &str = "base";
 
 /// Baked glyph atlas + font consts generated at build time by `assets::builder`.
 pub mod atlas {
@@ -49,6 +50,11 @@ pub struct MechanixKeyboardState {
     frame_callbacks: HashSet<ObjectId>,
     #[lens(skip)]
     keymap: Option<layout::Keymap>,
+    /// Index into `keymap.views` of the Current view — the one we render and
+    /// hit-test. Resolved from `INITIAL_VIEW` when the keymap loads, then updated
+    /// by view-switch keys. Reads are O(1) indexing (no per-frame name scan).
+    #[lens(skip)]
+    current_view: usize,
     /// The uploaded glyph atlas, resolved once the renderer has a GL context.
     #[lens(skip)]
     atlas_texture: Option<TextureId>,
@@ -75,11 +81,18 @@ impl MechanixKeyboardState {
             window: None,
             frame_callbacks: HashSet::new(),
             keymap: None,
+            current_view: 0,
             atlas_texture: None,
             scale: 1,
             last_hover: None,
             virtual_keyboard_state: VirtualKeyboardState::new(),
         }
+    }
+
+    /// The Current view — what to render and hit-test — or `None` until the
+    /// keymap is loaded.
+    fn current_view(&self) -> Option<&layout::View> {
+        self.keymap.as_ref()?.views.get(self.current_view)
     }
 }
 

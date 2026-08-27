@@ -7,13 +7,22 @@ use renderer::commands::{
 use renderer::{DmaBuf, RenderableSurface, Renderer, TextureId};
 use wayland::{Handle, ObjectId, WlBuffer, ZwpLinuxBufferParamsV1Flags, ZwpLinuxDmabufV1};
 
-use crate::layout::KeyFace;
-use crate::{MechanixKeyboardState, RENDER_VIEW, atlas, layout};
+use std::collections::HashSet;
+
+use crate::layout::{KeyAction, KeyFace};
+use crate::window::HANDLE_HEIGHT;
+use crate::{MechanixKeyboardState, atlas, layout};
 
 /// Background the keyboard bar clears to, behind the keys.
 const CLEAR: Color = Color::from_rgb8(24, 24, 32);
+/// Solid fill of the Handle band at the bottom edge — the whole bar when hidden,
+/// a band below the keys when shown. No glyph or grip; just this colour.
+const HANDLE_BG: Color = Color::from_rgb8(40, 44, 60);
 /// Fill colour of each key box.
 const KEY_BG: Color = Color::from_rgb8(46, 52, 72);
+/// Fill colour of a latched modifier's key box — a brighter accent so the armed
+/// (one-shot) state reads at a glance, OSK-style.
+const KEY_BG_ARMED: Color = Color::from_rgb8(72, 104, 156);
 /// Colour of the key label text.
 const KEY_LABEL: Color = Color::from_rgb8(220, 226, 240);
 /// The baked font used for labels (ASCII 32..126 only).
@@ -62,7 +71,13 @@ pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
 /// the whole view is
 /// scaled uniformly to fill it (`k = buffer_w / view_width`), which keeps the
 /// layout's aspect ratio — the bar's height was sized to match (see `window`).
-fn draw_view(renderer: &mut Renderer, view: &layout::View, tex: Option<TextureId>, buffer_w: f32) {
+fn draw_view(
+    renderer: &mut Renderer,
+    view: &layout::View,
+    tex: Option<TextureId>,
+    buffer_w: f32,
+    latched: &HashSet<String>,
+) {
     let view_w = view.width();
     if view_w <= 0.0 {
         return;
@@ -77,8 +92,14 @@ fn draw_view(renderer: &mut Renderer, view: &layout::View, tex: Option<TextureId
         let bw = (r.width() * k - 2.0 * inset).max(0.0);
         let bh = (r.height() * k - 2.0 * inset).max(0.0);
 
+        // A latched modifier key gets the armed fill; every other key the plain
+        // one. The face's opaque background must match, or its antialiased edges
+        // blend against the wrong colour.
+        let armed = matches!(&key.action, KeyAction::LatchModifier(name) if latched.contains(name));
+        let bg = if armed { KEY_BG_ARMED } else { KEY_BG };
+
         renderer.send_command(DrawRect {
-            color: KEY_BG,
+            color: bg,
             origin: Point::new(bx, by),
             z: Z_BOX,
             size: Size::new(bw, bh),
@@ -102,7 +123,7 @@ fn draw_view(renderer: &mut Renderer, view: &layout::View, tex: Option<TextureId
                     origin: Point::new(tx, baseline),
                     z: Z_TEXT,
                     color: KEY_LABEL,
-                    background: KEY_BG,
+                    background: bg,
                     is_opaque: true,
                 });
             }
@@ -119,7 +140,7 @@ fn draw_view(renderer: &mut Renderer, view: &layout::View, tex: Option<TextureId
                     z: Z_TEXT,
                     size: Size::new(side, side),
                     color: KEY_LABEL,
-                    background: KEY_BG,
+                    background: bg,
                     is_opaque: true,
                 });
             }
@@ -199,15 +220,39 @@ pub fn render(s: &mut MechanixKeyboardState) {
     // Physical buffer dims for scissor/scaling; logical dims for surface damage
     // (damage is in surface-local coordinates, which are pre-buffer-scale).
     let buffer_w = window.physical_width;
+    let buffer_h = window.physical_height;
+    let visible = window.visible;
+    let scale = s.scale.max(1) as u32;
     let (lw, lh) = (window.logical_width, window.logical_height);
 
     s.renderer.active_surface(&slots[back].surface);
     s.renderer.set_scissor(None);
     s.renderer.send_command(ClearColor(CLEAR));
 
-    if let Some(view) = s.keymap.as_ref().and_then(|km| km.view(RENDER_VIEW)) {
-        draw_view(&mut s.renderer, view, s.atlas_texture, buffer_w as f32);
+    // Keys draw only while shown; they scale by width to fill the top region,
+    // leaving the bottom HANDLE_HEIGHT band for the Handle.
+    if visible {
+        let current = s.current_view;
+        if let Some(view) = s.keymap.as_ref().and_then(|km| km.views.get(current)) {
+            draw_view(
+                &mut s.renderer,
+                view,
+                s.atlas_texture,
+                buffer_w as f32,
+                &s.virtual_keyboard_state.latched,
+            );
+        }
     }
+
+    // The Handle: a solid band filling the bottom HANDLE_HEIGHT of the buffer —
+    // the entire buffer when hidden (buffer_h == handle_ph).
+    let handle_ph = (HANDLE_HEIGHT * scale) as f32;
+    s.renderer.send_command(DrawRect {
+        color: HANDLE_BG,
+        origin: Point::new(0.0, buffer_h as f32 - handle_ph),
+        z: Z_BOX,
+        size: Size::new(buffer_w as f32, handle_ph),
+    });
 
     s.renderer.render_frame();
     s.renderer.finish();

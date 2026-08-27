@@ -4,12 +4,12 @@ use wayland::*;
 
 use crate::layout::{KeyAction, View};
 use crate::render;
-use crate::{MechanixKeyboardState, RENDER_VIEW, virtual_keyboard};
+use crate::{MechanixKeyboardState, virtual_keyboard};
 
-/// Placeholder height requested before the first `Configure` reveals the width.
-/// The real height is derived from the granted width (aspect-locked) and
-/// re-requested; no buffer is attached until then, so this is never shown.
-const INITIAL_HEIGHT: u32 = 100;
+/// Height in logical px of the Handle — the full-width band at the bottom edge,
+/// always drawn, whose tap toggles Bar visibility. It is the bar's entire height
+/// when hidden, and is added below the aspect-locked keyboard when shown.
+pub const HANDLE_HEIGHT: u32 = 40;
 
 #[derive(Default)]
 pub struct WaylandGlobals {
@@ -41,6 +41,10 @@ pub struct WindowState {
     /// A frame callback fired while the back buffer was still in flight; draw as
     /// soon as its `wl_buffer.release` lands.
     pub pending_frame: bool,
+    /// Bar visibility: `true` shows the keyboard above the Handle, `false` shows
+    /// only the Handle. Flipped by a Handle tap; drives the surface height. Starts
+    /// hidden.
+    pub visible: bool,
 }
 
 /// Kick off the registry roundtrip that discovers the globals.
@@ -127,13 +131,17 @@ fn create_window(s: &mut MechanixKeyboardState) {
         ZwlrLayerShellV1Layer::Top,
         "mechanix-keyboard",
     );
-    layer_surface.set_size(0, INITIAL_HEIGHT);
+    // Start hidden: the bar maps as just the Handle. Its height is fixed (no
+    // aspect dance needed), so the first Configure matches this request directly.
+    layer_surface.set_size(0, HANDLE_HEIGHT);
     layer_surface.set_anchor(
         ZwlrLayerSurfaceV1Anchor::Bottom
             | ZwlrLayerSurfaceV1Anchor::Left
             | ZwlrLayerSurfaceV1Anchor::Right,
     );
-    layer_surface.set_exclusive_zone(0);
+    // Reserve a constant Handle-height zone in both states, so toggling never
+    // reflows other clients; a shown keyboard overlaps the app's bottom content.
+    layer_surface.set_exclusive_zone(HANDLE_HEIGHT as i32);
     layer_surface.set_keyboard_interactivity(ZwlrLayerSurfaceV1KeyboardInteractivity::None);
     surface.commit();
 
@@ -146,8 +154,9 @@ fn create_window(s: &mut MechanixKeyboardState) {
         physical_height: 0,
         logical_width: 0,
         logical_height: 0,
-        requested_height: INITIAL_HEIGHT,
+        requested_height: HANDLE_HEIGHT,
         pending_frame: false,
+        visible: false,
     });
 }
 
@@ -187,9 +196,13 @@ fn on_configure(s: &mut MechanixKeyboardState, event: &ZwlrLayerSurfaceV1Event) 
     };
     let scale = s.scale.max(1);
 
-    // The rendered view's intrinsic logical size drives the aspect ratio.
+    // The current view's intrinsic logical size drives the keyboard's aspect
+    // ratio. All views share it, so the keyboard height is sized from one view
+    // and never resized on a view switch. Bar visibility is a separate axis that
+    // *does* resize: the Handle height is added when shown and is the whole bar
+    // when hidden.
     let (view_w, view_h) = {
-        let Some(view) = s.keymap.as_ref().and_then(|km| km.view(RENDER_VIEW)) else {
+        let Some(view) = s.current_view() else {
             return;
         };
         (view.width(), view.height())
@@ -212,13 +225,21 @@ fn on_configure(s: &mut MechanixKeyboardState, event: &ZwlrLayerSurfaceV1Event) 
         };
         window.logical_width = logical_w;
 
-        let desired_h = (view_h * logical_w as f32 / view_w).round() as u32;
-        if desired_h == 0 {
-            return;
-        }
+        // Shown: aspect-locked keyboard height plus the Handle. Hidden: Handle
+        // only, a fixed height that never depends on the granted width.
+        let desired_h = if window.visible {
+            let kb_h = (view_h * logical_w as f32 / view_w).round() as u32;
+            if kb_h == 0 {
+                return;
+            }
+            kb_h + HANDLE_HEIGHT
+        } else {
+            HANDLE_HEIGHT
+        };
 
         if window.requested_height != desired_h {
-            // Ask for the aspect-correct height and wait for the next Configure.
+            // Ask for the height this visibility state wants and wait for the
+            // next Configure.
             window.requested_height = desired_h;
             window.layer_surface.set_size(0, desired_h);
             window.surface.commit();
@@ -231,9 +252,13 @@ fn on_configure(s: &mut MechanixKeyboardState, event: &ZwlrLayerSurfaceV1Event) 
         return;
     };
 
-    // Height now matches our request — allocate physical-resolution slots once.
-    if s.window.as_ref().is_some_and(|w| w.slots.is_none()) {
-        let (buf_w, buf_h) = (logical_w * scale as u32, logical_h * scale as u32);
+    // (Re)allocate physical-resolution slots whenever the buffer size changes —
+    // at first map, and on every visibility toggle that resizes the bar.
+    let (buf_w, buf_h) = (logical_w * scale as u32, logical_h * scale as u32);
+    let needs_alloc = s.window.as_ref().is_some_and(|w| {
+        w.slots.is_none() || w.physical_width != buf_w || w.physical_height != buf_h
+    });
+    if needs_alloc {
         {
             let window = s.window.as_mut().expect("window exists");
             window.logical_height = logical_h;
@@ -293,6 +318,23 @@ fn on_pointer(s: &mut MechanixKeyboardState, event: &WlPointerEvent) {
         .just_pressed_position(MouseButton::Left)
         .copied();
 
+    // A click on the Handle toggles Bar visibility, in either state. The Handle
+    // sits below the keys, so it never overlaps a key's touch area.
+    if let Some(hr) = handle_rect(s) {
+        if pressed.is_some_and(|p| hr.contains_point(p)) {
+            toggle_visibility(s);
+            return;
+        }
+    }
+
+    // Keys are only live while shown; when hidden, clear any stale hover.
+    if !s.window.as_ref().is_some_and(|w| w.visible) {
+        if s.last_hover.take().is_some() {
+            tracing::info!("hover: none");
+        }
+        return;
+    }
+
     // Resolve the hover label and the clicked key's action while the keymap is
     // borrowed, then act after the borrow ends (emitting needs `&mut s`).
     let (hover, clicked) = {
@@ -306,7 +348,7 @@ fn on_pointer(s: &mut MechanixKeyboardState, event: &WlPointerEvent) {
 
     // Click: type the key the left button went down on this frame.
     if let Some(action) = clicked {
-        virtual_keyboard::emit_action(s, &action);
+        dispatch_action(s, &action);
     }
 
     // Hover: print only when the key under the pointer changes.
@@ -323,6 +365,20 @@ fn on_touch(s: &mut MechanixKeyboardState, event: &WlTouchEvent) {
     s.interactivity.call_before_frame();
     s.interactivity.process_touch(event);
 
+    // A tap on the Handle toggles Bar visibility, in either state. Check it
+    // first; the Handle sits below the keys, so it never overlaps a key.
+    if let Some(hr) = handle_rect(s) {
+        if s.interactivity.touch.tapped(hr) {
+            toggle_visibility(s);
+            return;
+        }
+    }
+
+    // Keys are only live while shown.
+    if !s.window.as_ref().is_some_and(|w| w.visible) {
+        return;
+    }
+
     // Probe each key's touch area for a tap that landed and completed this frame,
     // cloning the tapped key's action out so the keymap borrow ends before we
     // emit (which needs `&mut s`).
@@ -336,15 +392,108 @@ fn on_touch(s: &mut MechanixKeyboardState, event: &WlTouchEvent) {
     };
 
     if let Some(action) = tapped {
-        virtual_keyboard::emit_action(s, &action);
+        dispatch_action(s, &action);
     }
+}
+
+/// Route a tapped key's action. A view switch mutates the Current view; a
+/// modifier latch arms/disarms; both repaint here. Every other action is a
+/// keystroke the virtual keyboard emits (which also repaints if it consumes a
+/// latch, so the armed highlight clears).
+fn dispatch_action(s: &mut MechanixKeyboardState, action: &KeyAction) {
+    let target = match action {
+        KeyAction::SetView(name) => name.as_str(),
+        KeyAction::ToggleView { lock, unlock } => {
+            // Toggle by current view: if the lock view is already showing, go
+            // back to `unlock`; otherwise switch to `lock`.
+            let current = s.current_view().map(|v| v.name.as_str());
+            if current == Some(lock.as_str()) {
+                unlock.as_str()
+            } else {
+                lock.as_str()
+            }
+        }
+        KeyAction::LatchModifier(name) => {
+            // Arm/disarm the modifier and repaint so its key shows the change.
+            virtual_keyboard::toggle_latch(s, name);
+            render::render(s);
+            return;
+        }
+        _ => {
+            // Emit; if a latch was armed, it's now consumed, so repaint to drop
+            // the highlight. Compare the armed count across the emit.
+            let armed_before = s.virtual_keyboard_state.latched.len();
+            virtual_keyboard::emit_action(s, action);
+            if s.virtual_keyboard_state.latched.len() != armed_before {
+                render::render(s);
+            }
+            return;
+        }
+    };
+    switch_view(s, target);
+}
+
+/// Switch the Current view to the named one and repaint. A no-op (no repaint) if
+/// the name is unknown or already current.
+fn switch_view(s: &mut MechanixKeyboardState, name: &str) {
+    let Some(idx) = s.keymap.as_ref().and_then(|km| km.index_of(name)) else {
+        tracing::warn!(view = %name, "view switch to unknown view; ignored");
+        return;
+    };
+    if idx == s.current_view {
+        return;
+    }
+    s.current_view = idx;
+    tracing::info!(view = %name, "switched view");
+    render::render(s);
+}
+
+/// The Handle's rect in surface-local coordinates: the bottom `HANDLE_HEIGHT`
+/// band, full width. `None` until the surface size is known. When hidden the
+/// bar is only this tall, so the Handle is the whole surface.
+fn handle_rect(s: &MechanixKeyboardState) -> Option<Rect> {
+    let window = s.window.as_ref()?;
+    if window.logical_width == 0 || window.logical_height == 0 {
+        return None;
+    }
+    let h = HANDLE_HEIGHT as f32;
+    Some(Rect::new(
+        0.0,
+        window.logical_height as f32 - h,
+        window.logical_width as f32,
+        h,
+    ))
+}
+
+/// Flip Bar visibility and re-request the matching bar height. The resulting
+/// `Configure` reallocates slots at the new size and repaints.
+fn toggle_visibility(s: &mut MechanixKeyboardState) {
+    let logical_w = match s.window.as_ref() {
+        Some(w) if w.logical_width > 0 => w.logical_width,
+        _ => return,
+    };
+    let (view_w, view_h) = match s.current_view() {
+        Some(v) if v.width() > 0.0 => (v.width(), v.height()),
+        _ => return,
+    };
+    let window = s.window.as_mut().expect("window exists");
+    window.visible = !window.visible;
+    let target = if window.visible {
+        (view_h * logical_w as f32 / view_w).round() as u32 + HANDLE_HEIGHT
+    } else {
+        HANDLE_HEIGHT
+    };
+    window.requested_height = target;
+    window.layer_surface.set_size(0, target);
+    window.surface.commit();
+    tracing::info!(visible = window.visible, target, "toggled bar visibility");
 }
 
 /// The rendered view and the factor mapping its logical layout units onto
 /// surface-local (input) coordinates: `f = logical_width / view_width`. Returns
 /// `None` until the keymap and surface width are known.
 fn view_and_factor(s: &MechanixKeyboardState) -> Option<(&View, f32)> {
-    let view = s.keymap.as_ref()?.view(RENDER_VIEW)?;
+    let view = s.current_view()?;
     let view_w = view.width();
     let logical_w = s.window.as_ref()?.logical_width;
     if view_w <= 0.0 || logical_w == 0 {

@@ -23,14 +23,25 @@ struct Outline {
 }
 
 /// A squeekboard button's `action:` value — either a bare name (`erase`,
-/// `show_prefs`) or a structured map (`set_view`, `locking`). Only `erase` is
-/// wired this pass; the structured arm is deliberately opaque (matched but not
-/// inspected), so every other action resolves to `Unhandled`.
+/// `show_prefs`) or a structured single-key map (`set_view`, `locking`). Tried
+/// as untagged variants in order; `Other` is the `IgnoredAny` catch-all, so an
+/// unrecognised structured action still parses (and later resolves to
+/// `Unhandled`) instead of failing the whole layout.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum ActionSpec {
     Named(String),
-    Structured(serde::de::IgnoredAny),
+    SetView { set_view: String },
+    Locking { locking: LockingSpec },
+    Other(serde::de::IgnoredAny),
+}
+
+/// The body of a squeekboard `locking` action: the view tapped *to* (`lock_view`),
+/// and the view tapped *back to* (`unlock_view`) once the lock view is current.
+#[derive(Debug, Deserialize)]
+struct LockingSpec {
+    lock_view: String,
+    unlock_view: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -89,8 +100,19 @@ pub enum KeyAction {
     EmitKeysym(Keysym),
     /// Emit literal text, one keysym per char (e.g. the space key's `" "`).
     EmitText(String),
-    /// A squeekboard action not wired this pass (view switches, modifiers,
-    /// prefs). The key still draws and hit-tests; tapping it logs but types
+    /// Switch to a named view and stay there (squeekboard `set_view`). Sticky —
+    /// no auto-return.
+    SetView(String),
+    /// Flip between two named views by current view (squeekboard `locking`): go
+    /// to `lock` normally, or back to `unlock` when `lock` is already current.
+    ToggleView { lock: String, unlock: String },
+    /// Arm a real modifier (Control) for exactly the *next* keystroke, then it
+    /// auto-clears — the OSK one-shot latch. The modifier's mask is OR'd into the
+    /// next emitted Keystroke; tapping again disarms. Carries the squeekboard
+    /// modifier name (e.g. `Control`).
+    LatchModifier(String),
+    /// A squeekboard action not wired this pass (prefs, and modifiers other than
+    /// Control). The key still draws and hit-tests; tapping it logs but types
     /// nothing. Carries a name for that log.
     Unhandled(String),
 }
@@ -149,6 +171,12 @@ impl Keymap {
     /// Look a view up by name (e.g. the initial `base` view to render).
     pub fn view(&self, name: &str) -> Option<&View> {
         self.views.iter().find(|v| v.name == name)
+    }
+
+    /// The index of the view with this name, for storing as the current view.
+    /// Resolved once per switch so per-frame reads stay O(1) array indexing.
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.views.iter().position(|v| v.name == name)
     }
 
     /// Convert a parsed squeekboard layout into the IR, resolving each key's
@@ -270,10 +298,25 @@ fn resolve_action(token: &str, button: Option<&Button>) -> KeyAction {
                 ));
             }
             Some(ActionSpec::Named(a)) => return KeyAction::Unhandled(a.clone()),
-            Some(ActionSpec::Structured(_)) => return KeyAction::Unhandled(token.to_string()),
+            Some(ActionSpec::SetView { set_view }) => {
+                return KeyAction::SetView(set_view.clone());
+            }
+            Some(ActionSpec::Locking { locking }) => {
+                return KeyAction::ToggleView {
+                    lock: locking.lock_view.clone(),
+                    unlock: locking.unlock_view.clone(),
+                };
+            }
+            Some(ActionSpec::Other(_)) => return KeyAction::Unhandled(token.to_string()),
             None => {}
         }
-        if b.modifier.is_some() {
+        // A modifier button latches for the next keystroke. Only Control is wired
+        // this pass (see `virtual_keyboard::toggle_latch` and its `mod_masks`);
+        // every other modifier still defers to `Unhandled`.
+        if let Some(m) = b.modifier.as_deref() {
+            if m == "Control" {
+                return KeyAction::LatchModifier(m.to_string());
+            }
             return KeyAction::Unhandled(token.to_string());
         }
         if let Some(text) = &b.text {
@@ -346,6 +389,8 @@ pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
             info!("  view {}: {} key(s)", view.name, view.keys().count());
         }
 
+        // Start on the initial view; fall back to the first view if it's absent.
+        s.current_view = keymap.index_of(crate::INITIAL_VIEW).unwrap_or(0);
         s.keymap = Some(keymap);
     })
 }
@@ -397,12 +442,41 @@ mod tests {
     }
 
     #[test]
-    fn deferred_actions_are_unhandled() {
-        // Structured action (set_view / locking), a bare non-erase action, and a
-        // modifier all defer this pass — none should type.
-        let structured = button(|b| b.action = Some(ActionSpec::Structured(serde::de::IgnoredAny)));
+    fn set_view_action_resolves_to_setview() {
+        let b = button(|b| {
+            b.action = Some(ActionSpec::SetView {
+                set_view: "symbols".into(),
+            })
+        });
         assert!(matches!(
-            resolve_action("show_symbols", Some(&structured)),
+            resolve_action("show_symbols", Some(&b)),
+            KeyAction::SetView(v) if v == "symbols"
+        ));
+    }
+
+    #[test]
+    fn locking_action_resolves_to_toggleview() {
+        let b = button(|b| {
+            b.action = Some(ActionSpec::Locking {
+                locking: LockingSpec {
+                    lock_view: "upper".into(),
+                    unlock_view: "base".into(),
+                },
+            })
+        });
+        assert!(matches!(
+            resolve_action("Shift_L", Some(&b)),
+            KeyAction::ToggleView { lock, unlock } if lock == "upper" && unlock == "base"
+        ));
+    }
+
+    #[test]
+    fn deferred_actions_are_unhandled() {
+        // An unrecognised structured action, a bare non-erase action, and an
+        // unwired modifier all defer this pass — none should type or switch.
+        let unknown = button(|b| b.action = Some(ActionSpec::Other(serde::de::IgnoredAny)));
+        assert!(matches!(
+            resolve_action("mystery", Some(&unknown)),
             KeyAction::Unhandled(_)
         ));
 
@@ -412,11 +486,39 @@ mod tests {
             KeyAction::Unhandled(_)
         ));
 
-        let modifier = button(|b| b.modifier = Some("Control".into()));
+        // Alt is a modifier, but not wired to latch this pass — still deferred.
+        let alt = button(|b| b.modifier = Some("Alt".into()));
         assert!(matches!(
-            resolve_action("Ctrl", Some(&modifier)),
+            resolve_action("Alt", Some(&alt)),
             KeyAction::Unhandled(_)
         ));
+    }
+
+    #[test]
+    fn control_modifier_latches() {
+        let ctrl = button(|b| b.modifier = Some("Control".into()));
+        assert!(matches!(
+            resolve_action("Ctrl", Some(&ctrl)),
+            KeyAction::LatchModifier(m) if m == "Control"
+        ));
+    }
+
+    #[test]
+    fn fallback_structured_actions_resolve() {
+        // End-to-end: the untagged `ActionSpec` must parse real layout YAML, and
+        // the structured actions must reach their view-switch variants.
+        let layout: Layout = yaml_serde::from_str(FALLBACK_LAYOUT).expect("fallback parses");
+        let keymap = Keymap::from_layout(&layout);
+
+        let has_set_view = keymap
+            .keys()
+            .any(|k| matches!(&k.action, KeyAction::SetView(v) if v == "symbols"));
+        assert!(has_set_view, "a `set_view: symbols` key should be SetView");
+
+        let has_toggle = keymap.keys().any(|k| {
+            matches!(&k.action, KeyAction::ToggleView { lock, unlock } if lock == "upper" && unlock == "base")
+        });
+        assert!(has_toggle, "Shift_L should be ToggleView upper/base");
     }
 
     #[test]
