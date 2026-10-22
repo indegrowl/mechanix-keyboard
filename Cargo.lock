@@ -24,28 +24,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
 name = "app"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
 dependencies = [
- "app-macro",
- "frunk",
-]
-
-[[package]]
-name = "app-macro"
-version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "smallvec",
 ]
 
 [[package]]
@@ -61,17 +44,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
-name = "assets"
+name = "atlas"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
 dependencies = [
- "anyhow",
- "crunch",
+ "app",
  "fontdue",
+ "geometry",
  "png 0.18.1",
  "resvg",
- "serde",
- "toml",
 ]
 
 [[package]]
@@ -109,38 +90,12 @@ name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
-dependencies = [
- "bytemuck_derive",
-]
-
-[[package]]
-name = "bytemuck_derive"
-version = "1.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0e56a716f1e132ff6bf4bdac1c944a3fcdc1cae65f70a4a2a1ac3b401d2d1f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
-name = "byteorder-lite"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
-
-[[package]]
-name = "color_quant"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 
 [[package]]
 name = "core_maths"
@@ -159,12 +114,6 @@ checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
 ]
-
-[[package]]
-name = "crunch"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dc013e70da3bfe5b552de26a1f34ecf67d61ea811251d2bf75c1324a1ecb425"
 
 [[package]]
 name = "data-url"
@@ -235,98 +184,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
-name = "fontconfig-parser"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
-dependencies = [
- "roxmltree",
-]
-
-[[package]]
-name = "fontdb"
-version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3a6f9af55fb97ad673fb7a69533eb2f967648a06fa21f8c9bb2cd6d33975716"
-dependencies = [
- "fontconfig-parser",
- "log",
- "memmap2",
- "slotmap",
- "tinyvec",
- "ttf-parser 0.24.1",
-]
-
-[[package]]
 name = "fontdue"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7894823fa221401399e2598f8b63f81ac77ff5c63248b7656779bff1632d7d3d"
 dependencies = [
  "hashbrown 0.15.5",
- "ttf-parser 0.25.1",
-]
-
-[[package]]
-name = "frunk"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28aef0f9aa070bce60767c12ba9cb41efeaf1a2bc6427f87b7d83f11239a16d7"
-dependencies = [
- "frunk_core 0.4.4",
- "frunk_derives",
- "frunk_proc_macros",
- "serde",
-]
-
-[[package]]
-name = "frunk_core"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "476eeaa382e3462b84da5d6ba3da97b5786823c2d0d3a0d04ef088d073da225c"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "frunk_core"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bd3c9ba2e323e8b19e77f15873f60974a7d82f89b80e50c53be44b8b92927c1"
-
-[[package]]
-name = "frunk_derives"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0b4095fc99e1d858e5b8c7125d2638372ec85aa0fe6c807105cf10b0265ca6c"
-dependencies = [
- "frunk_proc_macro_helpers",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "frunk_proc_macro_helpers"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b70229a1347a20d4af9c06116cc452acef34f798668c6b69e97dd5c8a88052bd"
-dependencies = [
- "frunk_core 0.5.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "frunk_proc_macros"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c63fe4306e13ece9d1ac23ce02f121ffefd42ae876ad03ec2caf07232bde3023"
-dependencies = [
- "frunk_core 0.5.0",
- "frunk_proc_macro_helpers",
- "quote",
- "syn 2.0.119",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -375,22 +239,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "gif"
-version = "0.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
-dependencies = [
- "color_quant",
- "weezl",
-]
+name = "geometry"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
 
 [[package]]
-name = "glam"
-version = "0.29.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8babf46d4c1c9d92deac9f7be466f76dfc4482b6452fc5024b5e8daf6ffeb3ee"
+name = "gles"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
 dependencies = [
- "bytemuck",
+ "atlas",
+ "gbm",
+ "geometry",
+ "glow",
+ "khronos-egl",
+ "render",
 ]
 
 [[package]]
@@ -429,16 +292,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
-name = "image-webp"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f79afb8cbee2ef20f59ccd477a218c12a93943d075b492015ecb1bb81f8ee904"
-dependencies = [
- "byteorder-lite",
- "quick-error",
-]
-
-[[package]]
 name = "imagesize"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -457,21 +310,13 @@ dependencies = [
 [[package]]
 name = "interactivity"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
 dependencies = [
  "app",
- "utils",
- "wayland",
-]
-
-[[package]]
-name = "io-ring"
-version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
-dependencies = [
- "app",
- "io-uring",
- "libc",
+ "geometry",
+ "layout",
+ "smallvec",
+ "window",
 ]
 
 [[package]]
@@ -521,6 +366,16 @@ dependencies = [
  "arrayvec",
  "euclid",
  "smallvec",
+]
+
+[[package]]
+name = "layout"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
+dependencies = [
+ "app",
+ "geometry",
+ "taffy",
 ]
 
 [[package]]
@@ -579,25 +434,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "mecha-wayland"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
+dependencies = [
+ "app",
+ "atlas",
+ "geometry",
+ "gles",
+ "interactivity",
+ "layout",
+ "mechanix-widgets",
+ "paint",
+ "presentation",
+ "render",
+ "ring",
+ "text-input",
+ "theme",
+ "wayland",
+ "widgets",
+ "window",
+]
+
+[[package]]
 name = "mechanix-keyboard"
 version = "0.1.0"
 dependencies = [
- "app",
- "assets",
- "interactivity",
- "io-ring",
- "renderer",
+ "mecha-wayland",
  "rustix",
  "serde",
- "toml",
  "tracing",
  "tracing-subscriber",
- "ui",
- "utils",
- "wayland",
- "window-manager",
  "xkbcommon",
  "yaml_serde",
+]
+
+[[package]]
+name = "mechanix-widgets"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
+dependencies = [
+ "app",
+ "atlas",
+ "geometry",
+ "interactivity",
+ "layout",
+ "paint",
+ "theme",
+ "widgets",
 ]
 
 [[package]]
@@ -650,6 +534,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "paint"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
+dependencies = [
+ "app",
+ "atlas",
+ "geometry",
+]
+
+[[package]]
 name = "pico-args"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -688,6 +582,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "presentation"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
+dependencies = [
+ "app",
+ "atlas",
+ "geometry",
+ "gles",
+ "interactivity",
+ "layout",
+ "render",
+ "wayland",
+ "window",
+ "xkbcommon",
+]
+
+[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -705,12 +616,6 @@ checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
-
-[[package]]
-name = "quick-error"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quick-xml"
@@ -749,20 +654,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "renderer"
+name = "render"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
 dependencies = [
- "anyhow",
- "assets",
- "bytemuck",
- "gbm",
- "glow",
- "khronos-egl",
- "libc",
- "png 0.18.1",
- "tracing",
- "utils",
+ "app",
+ "geometry",
+ "layout",
+ "paint",
+ "window",
 ]
 
 [[package]]
@@ -771,15 +671,12 @@ version = "0.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a325d5e8d1cebddd070b13f44cec8071594ab67d1012797c121f27a669b7958"
 dependencies = [
- "gif",
- "image-webp",
  "log",
  "pico-args",
  "rgb",
  "svgtypes",
  "tiny-skia",
  "usvg",
- "zune-jpeg",
 ]
 
 [[package]]
@@ -789,6 +686,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "ring"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
+dependencies = [
+ "app",
+ "io-uring",
+ "libc",
 ]
 
 [[package]]
@@ -815,24 +722,6 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
-
-[[package]]
-name = "rustybuzz"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c85d1ccd519e61834798eb52c4e886e8c2d7d698dd3d6ce0b1b47eb8557f1181"
-dependencies = [
- "bitflags 2.13.1",
- "bytemuck",
- "core_maths",
- "log",
- "smallvec",
- "ttf-parser 0.24.1",
- "unicode-bidi-mirroring",
- "unicode-ccc",
- "unicode-properties",
- "unicode-script",
-]
 
 [[package]]
 name = "ryu"
@@ -868,15 +757,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
-]
-
-[[package]]
-name = "serde_spanned"
-version = "0.6.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -984,6 +864,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "text-input"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
+dependencies = [
+ "app",
+ "interactivity",
+ "wayland",
+ "widgets",
+]
+
+[[package]]
+name = "theme"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
+dependencies = [
+ "app",
+ "geometry",
+]
+
+[[package]]
 name = "thread_local"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1017,62 +917,6 @@ dependencies = [
  "bytemuck",
  "strict-num",
 ]
-
-[[package]]
-name = "tinyvec"
-version = "1.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
-dependencies = [
- "tinyvec_macros",
-]
-
-[[package]]
-name = "tinyvec_macros"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
-
-[[package]]
-name = "toml"
-version = "0.8.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362"
-dependencies = [
- "serde",
- "serde_spanned",
- "toml_datetime",
- "toml_edit",
-]
-
-[[package]]
-name = "toml_datetime"
-version = "0.6.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22cddaf88f4fbc13c51aebbf5f8eceb5c7c5a9da2ac40a13519eb5b0a0e8f11c"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "toml_edit"
-version = "0.22.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
-dependencies = [
- "indexmap",
- "serde",
- "serde_spanned",
- "toml_datetime",
- "toml_write",
- "winnow",
-]
-
-[[package]]
-name = "toml_write"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tracing"
@@ -1137,15 +981,6 @@ dependencies = [
 
 [[package]]
 name = "ttf-parser"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5be21190ff5d38e8b4a2d3b6a3ae57f612cc39c96e83cedeaf7abc338a8bac4a"
-dependencies = [
- "core_maths",
-]
-
-[[package]]
-name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
@@ -1154,69 +989,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "ui"
-version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
-dependencies = [
- "app",
- "assets",
- "interactivity",
- "taffy",
- "ui-macro",
- "utils",
-]
-
-[[package]]
-name = "ui-macro"
-version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "unicode-bidi"
-version = "0.3.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
-
-[[package]]
-name = "unicode-bidi-mirroring"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64af057ad7466495ca113126be61838d8af947f41d93a949980b2389a118082f"
-
-[[package]]
-name = "unicode-ccc"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "260bc6647b3893a9a90668360803a15f96b85a5257b1c3a0c3daf6ae2496de42"
-
-[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
-
-[[package]]
-name = "unicode-properties"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
-
-[[package]]
-name = "unicode-script"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "383ad40bb927465ec0ce7720e033cb4ca06912855fc35db31b5755d0de75b1ee"
-
-[[package]]
-name = "unicode-vo"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1d386ff53b415b7fe27b50bb44679e2cc4660272694b7b6f3326d8480823a94"
 
 [[package]]
 name = "usvg"
@@ -1227,31 +1003,17 @@ dependencies = [
  "base64",
  "data-url",
  "flate2",
- "fontdb",
  "imagesize",
  "kurbo",
  "log",
  "pico-args",
  "roxmltree",
- "rustybuzz",
  "simplecss",
  "siphasher",
  "strict-num",
  "svgtypes",
  "tiny-skia-path",
- "unicode-bidi",
- "unicode-script",
- "unicode-vo",
  "xmlwriter",
-]
-
-[[package]]
-name = "utils"
-version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
-dependencies = [
- "bytemuck",
- "glam",
 ]
 
 [[package]]
@@ -1314,17 +1076,15 @@ dependencies = [
 [[package]]
 name = "wayland"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
 dependencies = [
  "app",
  "bitflags 2.13.1",
- "io-ring",
- "io-uring",
- "libc",
  "prettyplease",
  "proc-macro2",
  "quick-xml",
  "quote",
+ "ring",
  "serde",
  "syn 2.0.119",
 ]
@@ -1340,26 +1100,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "weezl"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+name = "widgets"
+version = "0.1.0"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
+dependencies = [
+ "app",
+ "atlas",
+ "bitflags 2.13.1",
+ "geometry",
+ "interactivity",
+ "layout",
+ "paint",
+]
 
 [[package]]
-name = "window-manager"
+name = "window"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland.git#f43c416148a1c4cfc290bf3056e7c73a43abb326"
+source = "git+https://github.com/DevPika/mecha-wayland.git?branch=layer-resize#c080565da51a5d08c6d6ce84d34ac6c64efdaef0"
 dependencies = [
- "anyhow",
  "app",
- "assets",
- "interactivity",
- "io-ring",
- "libc",
- "renderer",
- "taffy",
- "ui",
- "wayland",
+ "geometry",
+ "layout",
 ]
 
 [[package]]
@@ -1375,15 +1136,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
-]
-
-[[package]]
-name = "winnow"
-version = "0.7.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
-dependencies = [
- "memchr",
 ]
 
 [[package]]
@@ -1420,19 +1172,4 @@ dependencies = [
  "libyaml-rs",
  "ryu",
  "serde",
-]
-
-[[package]]
-name = "zune-core"
-version = "0.4.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
-
-[[package]]
-name = "zune-jpeg"
-version = "0.4.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29ce2c8a9384ad323cf564b67da86e21d3cfdff87908bc1223ed5c99bc792713"
-dependencies = [
- "zune-core",
 ]

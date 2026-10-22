@@ -1,142 +1,112 @@
-use interactivity::pointer::MouseButton;
-use rustix::fs::{MemfdFlags, SealFlags};
-use rustix::mm::{MapFlags, ProtFlags};
-use std::collections::{HashMap, HashSet};
+//! `zwp_virtual_keyboard_v1` — the virtual-keyboard-v1 protocol client.
+//!
+//! `VirtualKeyboardState` is a `Resource`; the module binds the
+//! `ZwpVirtualKeyboardManagerV1` global conditionally from `Globals` and creates
+//! the `ZwpVirtualKeyboardV1` object once a seat is available. It also handles
+//! keymap compilation, keysym→keystroke indexing and memfd keymap file creation.
+//! Keycode emission lives in `vk_emit_keysym` in `main.rs`.
+
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, Write};
 use std::os::fd::{AsFd, OwnedFd};
 use std::time::Instant;
-use utils::Point;
-use wayland::{
-    Handle, Interface, WlKeyboard, WlKeyboardEvent, WlKeyboardKeyState, WlKeyboardKeymapFormat,
-    WlPointer, WlPointerEvent, WlRegistryEvent, WlSeat, WlSeatCapability, WlSeatEvent, WlTouch,
-    WlTouchEvent, ZwpVirtualKeyboardManagerV1, ZwpVirtualKeyboardV1,
-};
+
+use rustix::fs::{MemfdFlags, SealFlags};
 use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
-use xkbcommon::xkb::{self, Context, Keycode, Keymap, Keysym, MOD_NAME_CTRL, MOD_NAME_SHIFT};
+use xkbcommon::xkb::{
+    self, Context, Keycode, Keymap, Keysym, MOD_NAME_ALT, MOD_NAME_CTRL, MOD_NAME_SHIFT,
+};
 
-use crate::layout::{KeyAction, View};
-use crate::window::{handle_rect, scale_rect, toggle_visibility, view_and_factor};
-use crate::{MechanixKeyboardState, render};
+use crate::layout::Modifier;
 
-pub struct KeymapWithFd {
-    fd: OwnedFd,
-    size: u32,
-}
-
-impl KeymapWithFd {
-    pub fn new(text: &[u8]) -> rustix::io::Result<Self> {
-        let (fd, size) = make_keymap_fd(text)?;
-        Ok(Self { fd, size })
-    }
-}
+use mecha_wayland::prelude::*;
 
 /// One resolved keystroke: the evdev keycode to press plus the modifier mask to
-/// hold while pressing it. A level-0 keysym gets `mods == 0`; a level-1 keysym
-/// (e.g. `Q`, `exclam`) gets its physical key's keycode plus the Shift mask, so
-/// emission reproduces the shifted keysym without any persistent modifier.
+/// hold while pressing it.
 #[derive(Debug, Clone, Copy)]
 pub struct Keystroke {
     pub code: u32,
     pub mods: u32,
 }
 
+/// All state the virtual-keyboard-v1 client owns. Lives on the app as a
+/// `Resource`, reachable from `Context` handlers via `ctx.resource_mut::<VirtualKeyboardState>()`.
 pub struct VirtualKeyboardState {
-    /// Wayland handles
-    pub seat: Option<Handle<WlSeat>>,
-    pub pointer: Option<Handle<WlPointer>>,
-    pub keyboard: Option<Handle<WlKeyboard>>,
-    pub touch: Option<Handle<WlTouch>>,
-    pub virtual_keyboard_manager: Option<Handle<ZwpVirtualKeyboardManagerV1>>,
-    pub virtual_keyboard: Option<Handle<ZwpVirtualKeyboardV1>>,
+    /// The `ZwpVirtualKeyboardV1` object; `None` until both the manager and a
+    /// seat are available.
+    pub virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
 
     pub start_time: Instant,
-    pub keymap: Option<KeymapWithFd>,
     /// keysym → keystroke, scanned from the uploaded keymap's base and shifted
     /// levels. Empty until the keymap is sent; emission is a no-op until then.
     pub keycodes: HashMap<Keysym, Keystroke>,
-    /// squeekboard modifier name → its serialized mask, derived from the keymap
-    /// (e.g. `Control` → the Control mask). Only latchable modifiers are indexed.
-    pub mod_masks: HashMap<String, u32>,
-    /// The modifier names currently latched — armed for the next keystroke, which
-    /// consumes (clears) them. OSK one-shot semantics; see `toggle_latch`.
-    pub latched: HashSet<String>,
+    /// Latchable modifier → its serialized mask, derived from the keymap
+    /// (e.g. `Control` → the Control mask, `Alt` → Mod1).
+    pub mod_masks: HashMap<Modifier, u32>,
 }
 
-impl VirtualKeyboardState {
-    pub fn new() -> Self {
+impl Default for VirtualKeyboardState {
+    fn default() -> Self {
         Self {
-            seat: None,
-            pointer: None,
-            keyboard: None,
-            touch: None,
-            virtual_keyboard_manager: None,
             virtual_keyboard: None,
             start_time: Instant::now(),
-            keymap: None,
             keycodes: HashMap::new(),
             mod_masks: HashMap::new(),
-            latched: HashSet::new(),
         }
     }
 }
 
-pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
-    app::Module::new()
-        .on(on_registry)
-        .on(on_seat)
-        .on(on_pointer)
-        .on(on_keyboard)
-        .on(on_touch)
-}
+impl Resource for VirtualKeyboardState {}
 
-/// Bind to the globals when the registry advertises them.
-fn on_registry(s: &mut MechanixKeyboardState, event: &WlRegistryEvent) {
-    let WlRegistryEvent::Global {
-        sender,
-        name,
-        interface,
-        version,
-    } = event
-    else {
-        return;
-    };
-    match interface.as_str() {
-        WlSeat::NAME => s.virtual_keyboard_state.seat = Some(sender.bind(*name, *version)),
-        ZwpVirtualKeyboardManagerV1::NAME => {
-            s.virtual_keyboard_state.virtual_keyboard_manager = Some(sender.bind(*name, *version))
-        }
-        _ => {}
-    }
-    if s.virtual_keyboard_state.seat.is_some()
-        && s.virtual_keyboard_state.virtual_keyboard_manager.is_some()
-    {
-        init(s);
+/// Module that binds the virtual-keyboard manager global and creates the VK
+/// object. Install after `WaylandModule` (which provides `Globals` and `Wayland`)
+/// and after the seat is bound.
+pub struct VirtualKeyboardModule;
+
+impl Module for VirtualKeyboardModule {
+    fn install(self, app: &mut App) {
+        app.insert_resource(VirtualKeyboardState::default());
+        init(app);
     }
 }
 
-/// Create the virtual keyboard after the globals are available.
-fn init(s: &mut MechanixKeyboardState) {
-    let (Some(seat), Some(manager)) = (
-        s.virtual_keyboard_state.seat.clone(),
-        s.virtual_keyboard_state.virtual_keyboard_manager.clone(),
-    ) else {
-        tracing::error!("could not find globals!");
+/// Try to bind the virtual-keyboard manager and create the VK object.
+/// Called at install and safe to call multiple times — it's a no-op once the
+/// VK exists.
+fn init(app: &mut App) {
+    let seat = *app.resource::<WlSeat>();
+
+    // The manager is an optional global — not every compositor supports
+    // virtual-keyboard-v1. Bind it from `Globals` if advertised.
+    let manager = app
+        .resource::<Globals>()
+        .find(ZwpVirtualKeyboardManagerV1::NAME)
+        .cloned()
+        .map(|g| {
+            let (globals, mut wl) = app.query::<(Res<Globals>, ResMut<Wayland>)>();
+            globals.bind::<ZwpVirtualKeyboardManagerV1>(&g, &mut wl)
+        });
+
+    let Some(manager) = manager else {
+        tracing::warn!("compositor does not advertise zwp_virtual_keyboard_manager_v1");
         return;
     };
 
-    let vkbd = manager.create_virtual_keyboard(&seat);
+    let vkbd = {
+        let mut wl = app.resource_mut::<Wayland>();
+        manager.create_virtual_keyboard(&mut wl, seat)
+    };
 
     // Compile a standard keymap from the default rules and serialise it.
     let ctx = Context::new(0);
     let keymap = Keymap::new_from_names(&ctx, "", "", "us", "", None, 0)
         .expect("failed to compile default keymap");
 
-    // Index the keymap's base level (layout 0, level 0) so a tapped keysym maps
-    // to the evdev keycode to send. `evdev = xkb_keycode - 8`; first key wins for
-    // a keysym that appears on more than one physical key.
     let keycodes = scan_keycodes(&keymap);
 
     let text = keymap.get_as_string(XKB_KEYMAP_FORMAT_TEXT_V1);
-    let keymap_fd = match KeymapWithFd::new(text.as_bytes()) {
+    let keymap_fd = match make_keymap_fd(text.as_bytes()) {
         Ok(keymap) => keymap,
         Err(err) => {
             tracing::warn!(%err, "failed to create keymap memfd");
@@ -145,225 +115,35 @@ fn init(s: &mut MechanixKeyboardState) {
     };
 
     vkbd.keymap(
+        &mut app.resource_mut::<Wayland>(),
         WlKeyboardKeymapFormat::XkbV1,
         keymap_fd.fd.as_fd(),
         keymap_fd.size,
     );
 
-    // Index the modifiers a latched key can arm, mapping the squeekboard name
-    // used in the layout to the serialized mask sent over the wire. Control only
-    // this pass — mirrors `layout::resolve_action`'s modifier gate.
-    let mut mod_masks = HashMap::new();
-    mod_masks.insert(
-        "Control".to_string(),
-        1u32 << keymap.mod_get_index(MOD_NAME_CTRL),
-    );
+    // Index the modifiers a latched key can arm, mapping each to the serialized
+    // mask sent over the wire. Mirrors the modifier gate in
+    // `layout::resolve_action`.
+    let mod_masks = Modifier::ALL
+        .into_iter()
+        .map(|m| {
+            let name = match m {
+                Modifier::Control => MOD_NAME_CTRL,
+                Modifier::Alt => MOD_NAME_ALT,
+            };
+            (m, 1u32 << keymap.mod_get_index(name))
+        })
+        .collect();
 
     tracing::info!(mapped = keycodes.len(), "virtual keyboard ready");
-    s.virtual_keyboard_state.virtual_keyboard = Some(vkbd);
-    s.virtual_keyboard_state.keymap = Some(keymap_fd);
-    s.virtual_keyboard_state.keycodes = keycodes;
-    s.virtual_keyboard_state.mod_masks = mod_masks;
-}
-
-/// Bind keyboard/pointer/touch as the seat reports having them.
-fn on_seat(s: &mut MechanixKeyboardState, event: &WlSeatEvent) {
-    let WlSeatEvent::Capabilities { capabilities, .. } = event else {
-        return;
-    };
-    let Some(seat) = s.virtual_keyboard_state.seat.clone() else {
-        return;
-    };
-    if capabilities.contains(WlSeatCapability::Keyboard)
-        && s.virtual_keyboard_state.keyboard.is_none()
-    {
-        s.virtual_keyboard_state.keyboard = Some(seat.get_keyboard());
-    }
-    if capabilities.contains(WlSeatCapability::Pointer)
-        && s.virtual_keyboard_state.pointer.is_none()
-    {
-        s.virtual_keyboard_state.pointer = Some(seat.get_pointer());
-    }
-    if capabilities.contains(WlSeatCapability::Touch) && s.virtual_keyboard_state.touch.is_none() {
-        s.virtual_keyboard_state.touch = Some(seat.get_touch());
-    }
-}
-
-// ── input → interactivity ──────────────────────────────────────────────────
-
-fn on_keyboard(s: &mut MechanixKeyboardState, event: &WlKeyboardEvent) {
-    s.interactivity.call_before_frame();
-    s.interactivity.process_keyboard(event);
-    tracing::debug!(
-        just_pressed = ?s.interactivity.keyboard.just_pressed_keys(),
-        just_released = ?s.interactivity.keyboard.just_released_keys(),
-        modifiers = ?s.interactivity.keyboard.modifiers(),
-        "keyboard input",
-    );
-}
-
-fn on_pointer(s: &mut MechanixKeyboardState, event: &WlPointerEvent) {
-    s.interactivity.call_before_frame();
-    s.interactivity.process_pointer(event);
-
-    // Copy the surface-local points out before the keymap borrow, so the
-    // interactivity borrow is released for the hit-test below.
-    let position = s.interactivity.pointer.position();
-    let pressed = s
-        .interactivity
-        .pointer
-        .just_pressed_position(MouseButton::Left)
-        .copied();
-
-    // A click on the Handle toggles Bar visibility, in either state. The Handle
-    // sits below the keys, so it never overlaps a key's touch area.
-    if let Some(hr) = handle_rect(s) {
-        if pressed.is_some_and(|p| hr.contains_point(p)) {
-            toggle_visibility(s);
-            return;
-        }
-    }
-
-    // Keys are only live while shown; when hidden, clear any stale hover.
-    if !s.window.as_ref().is_some_and(|w| w.visible) {
-        if s.last_hover.take().is_some() {
-            tracing::info!("hover: none");
-        }
-        return;
-    }
-
-    // Resolve the hover label and the clicked key's action while the keymap is
-    // borrowed, then act after the borrow ends (emitting needs `&mut s`).
-    let (hover, clicked) = {
-        let Some((view, f)) = view_and_factor(s) else {
-            return;
-        };
-        let hover = key_at(view, f, position);
-        let clicked = pressed.and_then(|p| action_at(view, f, p));
-        (hover, clicked)
-    };
-
-    // Click: type the key the left button went down on this frame.
-    if let Some(action) = clicked {
-        dispatch_action(s, &action);
-    }
-
-    // Hover: print only when the key under the pointer changes.
-    if hover != s.last_hover {
-        match &hover {
-            Some(label) => tracing::info!(key = %label, "hover"),
-            None => tracing::info!("hover: none"),
-        }
-        s.last_hover = hover;
-    }
-}
-
-fn on_touch(s: &mut MechanixKeyboardState, event: &WlTouchEvent) {
-    s.interactivity.call_before_frame();
-    s.interactivity.process_touch(event);
-
-    // A tap on the Handle toggles Bar visibility, in either state. Check it
-    // first; the Handle sits below the keys, so it never overlaps a key.
-    if let Some(hr) = handle_rect(s) {
-        if s.interactivity.touch.tapped(hr) {
-            toggle_visibility(s);
-            return;
-        }
-    }
-
-    // Keys are only live while shown.
-    if !s.window.as_ref().is_some_and(|w| w.visible) {
-        return;
-    }
-
-    // Probe each key's touch area for a tap that landed and completed this frame,
-    // cloning the tapped key's action out so the keymap borrow ends before we
-    // emit (which needs `&mut s`).
-    let tapped = {
-        let Some((view, f)) = view_and_factor(s) else {
-            return;
-        };
-        view.keys()
-            .find(|key| s.interactivity.touch.tapped(scale_rect(key.touch_area, f)))
-            .map(|key| key.action.clone())
-    };
-
-    if let Some(action) = tapped {
-        dispatch_action(s, &action);
-    }
-}
-
-/// Route a tapped key's action. A view switch mutates the Current view; a
-/// modifier latch arms/disarms; both repaint here. Every other action is a
-/// keystroke the virtual keyboard emits (which also repaints if it consumes a
-/// latch, so the armed highlight clears).
-fn dispatch_action(s: &mut MechanixKeyboardState, action: &KeyAction) {
-    let target = match action {
-        KeyAction::SetView(name) => name.as_str(),
-        KeyAction::ToggleView { lock, unlock } => {
-            // Toggle by current view: if the lock view is already showing, go
-            // back to `unlock`; otherwise switch to `lock`.
-            let current = s.current_view().map(|v| v.name.as_str());
-            if current == Some(lock.as_str()) {
-                unlock.as_str()
-            } else {
-                lock.as_str()
-            }
-        }
-        KeyAction::LatchModifier(name) => {
-            // Arm/disarm the modifier and repaint so its key shows the change.
-            toggle_latch(s, name);
-            render::render(s);
-            return;
-        }
-        _ => {
-            // Emit; if a latch was armed, it's now consumed, so repaint to drop
-            // the highlight. Compare the armed count across the emit.
-            let armed_before = s.virtual_keyboard_state.latched.len();
-            emit_action(s, action);
-            if s.virtual_keyboard_state.latched.len() != armed_before {
-                render::render(s);
-            }
-            return;
-        }
-    };
-    switch_view(s, target);
-}
-
-/// Switch the Current view to the named one and repaint. A no-op (no repaint) if
-/// the name is unknown or already current.
-fn switch_view(s: &mut MechanixKeyboardState, name: &str) {
-    let Some(idx) = s.keymap.as_ref().and_then(|km| km.index_of(name)) else {
-        tracing::warn!(view = %name, "view switch to unknown view; ignored");
-        return;
-    };
-    if idx == s.current_view {
-        return;
-    }
-    s.current_view = idx;
-    tracing::info!(view = %name, "switched view");
-    render::render(s);
-}
-
-/// Label of the first key whose (scaled) touch area contains `p`, else `None`.
-fn key_at(view: &View, f: f32, p: Point) -> Option<String> {
-    view.keys()
-        .find(|k| scale_rect(k.touch_area, f).contains_point(p))
-        .map(|k| k.display_label().to_string())
-}
-
-/// Action of the first key whose (scaled) touch area contains `p`, cloned.
-fn action_at(view: &View, f: f32, p: Point) -> Option<KeyAction> {
-    view.keys()
-        .find(|k| scale_rect(k.touch_area, f).contains_point(p))
-        .map(|k| k.action.clone())
+    let mut vk = app.resource_mut::<VirtualKeyboardState>();
+    vk.virtual_keyboard = Some(vkbd);
+    vk.keycodes = keycodes;
+    vk.mod_masks = mod_masks;
 }
 
 /// Build the `keysym → Keystroke` map from a compiled keymap's base (level 0) and
-/// shifted (level 1) levels. A level-0 keysym stores an empty modifier mask; a
-/// level-1 keysym stores the Shift mask, so tapping it emits the shifted keysym.
-/// Levels are scanned low-to-high with `or_insert`, so the fewest-modifiers form
-/// wins for a keysym present at both (e.g. a keysym that is its own shift).
+/// shifted (level 1) levels.
 fn scan_keycodes(keymap: &Keymap) -> HashMap<Keysym, Keystroke> {
     let shift = 1u32 << keymap.mod_get_index(MOD_NAME_SHIFT);
     let mut map = HashMap::new();
@@ -383,98 +163,10 @@ fn scan_keycodes(keymap: &Keymap) -> HashMap<Keysym, Keystroke> {
     map
 }
 
-/// Emit a Key action over the virtual keyboard: a keysym (or each char of a text
-/// run) becomes a keycode down+up; unwired actions just log. A keystroke emission
-/// consumes any latched modifiers (one-shot); an `Unhandled` tap does not, so a
-/// latch stays armed until a real key fires.
-pub fn emit_action(s: &mut MechanixKeyboardState, action: &KeyAction) {
-    match action {
-        KeyAction::EmitKeysym(ks) => {
-            // Printable keysyms commit via IM2; control keysyms (BackSpace,
-            // Return, …) fall back to the virtual-keyboard-v1 keysym transport,
-            // since committing `keysym_get_name` would literally type "BackSpace".
-            if let Some(text) = keysym_text(*ks)
-                && crate::input_method::commit_text(s, &text)
-            {
-                tracing::info!(input = %text, "input method");
-                consume_latch(s);
-            } else {
-                emit_keysym(s, *ks);
-                consume_latch(s);
-            }
-        }
-        KeyAction::EmitText(text) => {
-            // When a text input is focused, the compositor has activated IM2;
-            // commit the run as one `commit_string` — the idiomatic IM2 text
-            // path — rather than synthesising a keysym per character. Falls back
-            // to the virtual-keyboard-v1 keysym transport when no text input is
-            // focused (IM2 inactive or unbound).
-            if crate::input_method::commit_text(s, text) {
-                tracing::info!("Input method: {text}");
-                consume_latch(s);
-            } else {
-                for ch in text.chars() {
-                    emit_keysym(s, Keysym::from_char(ch));
-                }
-                consume_latch(s);
-            }
-        }
-        KeyAction::Unhandled(name) => {
-            tracing::info!(action = %name, "tapped key with no wired action");
-        }
-        // View switches and latches are peeled off by `window::dispatch_action`
-        // before this; reaching here means a dispatch bug, not a keystroke.
-        KeyAction::SetView(_) | KeyAction::ToggleView { .. } | KeyAction::LatchModifier(_) => {
-            tracing::error!("non-emitting action reached the virtual keyboard; dispatch bug");
-        }
-    }
-}
-
-/// Toggle a modifier's latch: arm it if idle, disarm it if already armed (a
-/// second tap cancels). No-op with a warning for a modifier we have no mask for.
-/// The armed state is one-shot — the next keystroke emission clears it.
-pub fn toggle_latch(s: &mut MechanixKeyboardState, name: &str) {
-    if !s.virtual_keyboard_state.mod_masks.contains_key(name) {
-        tracing::warn!(modifier = %name, "modifier has no mask; not latched");
-        return;
-    }
-    if s.virtual_keyboard_state.latched.remove(name) {
-        tracing::info!(modifier = %name, "modifier latch cleared");
-    } else {
-        s.virtual_keyboard_state.latched.insert(name.to_string());
-        tracing::info!(modifier = %name, "modifier latched; armed for next key");
-    }
-}
-
-/// The combined mask of every currently-latched modifier, to OR into a keystroke.
-fn latched_mask(s: &MechanixKeyboardState) -> u32 {
-    s.virtual_keyboard_state
-        .latched
-        .iter()
-        .filter_map(|n| s.virtual_keyboard_state.mod_masks.get(n))
-        .fold(0, |acc, m| acc | m)
-}
-
-/// Clear all latched modifiers after a keystroke fires (one-shot). No-op when
-/// nothing is armed, so callers can invoke it unconditionally.
-fn consume_latch(s: &mut MechanixKeyboardState) {
-    if !s.virtual_keyboard_state.latched.is_empty() {
-        s.virtual_keyboard_state.latched.clear();
-        tracing::debug!("latched modifiers consumed");
-    }
-}
-
 /// The insertable text a keysym produces, or `None` when it's a control key
 /// (BackSpace, Return, Tab, Escape, Delete, arrows, function keys, …) with no
-/// printable glyph. `keysym_get_name` returns the X11 *name* ("BackSpace"),
-/// which is not the character; `keysym_to_utf32` returns the produced code
-/// point, or `0` when the keysym yields no character at all. Control code
-/// points (C0/C1/DEL) are rejected so they never become a `commit_string` —
-/// such keys fall back to the virtual-keyboard-v1 keysym transport, which the
-/// compositor forwards as a real key event (so BackSpace deletes instead of
-/// typing "BackSpace"). Space (U+0020) is *not* a control char and commits
-/// normally.
-fn keysym_text(ks: Keysym) -> Option<String> {
+/// printable glyph.
+pub fn keysym_text(ks: Keysym) -> Option<String> {
     let cps = xkb::keysym_to_utf32(ks);
     if cps == 0 {
         return None;
@@ -486,149 +178,67 @@ fn keysym_text(ks: Keysym) -> Option<String> {
     Some(ch.to_string())
 }
 
-/// Send one keysym as a keycode down+up, holding the keystroke's modifiers around
-/// it (e.g. Shift for an uppercase or shifted keysym) and clearing them after.
-/// No-ops (with a log) if the keysym isn't in the uploaded keymap or the keyboard
-/// isn't ready yet.
-fn emit_keysym(s: &mut MechanixKeyboardState, ks: Keysym) {
-    let name = xkb::keysym_get_name(ks);
-    let Some(&stroke) = s.virtual_keyboard_state.keycodes.get(&ks) else {
-        tracing::warn!(keysym = %name, "keysym absent from keymap; not typed");
-        return;
-    };
-    let Some(vkbd) = s.virtual_keyboard_state.virtual_keyboard.clone() else {
-        tracing::warn!(keysym = %name, "virtual keyboard not ready; key dropped");
-        return;
-    };
-    // Combine the keystroke's own modifiers (e.g. Shift for a shifted keysym)
-    // with any latched modifiers (e.g. an armed Ctrl) — a latched Ctrl over an
-    // upper-view key yields Ctrl+Shift+key.
-    let mods = stroke.mods | latched_mask(s);
-    let time = (Instant::now() - s.virtual_keyboard_state.start_time).as_millis() as u32;
-    // Depress the combined modifiers before the key so the receiving app maps the
-    // keycode to the right level; clear them after so nothing lingers. A bare
-    // level-0 key with no latch (mask 0) skips this — wire traffic is unchanged.
-    if mods != 0 {
-        vkbd.modifiers(mods, 0, 0, 0);
-    }
-    vkbd.key(time, stroke.code, WlKeyboardKeyState::Pressed.into());
-    vkbd.key(time, stroke.code, WlKeyboardKeyState::Released.into());
-    if mods != 0 {
-        vkbd.modifiers(0, 0, 0, 0);
-    }
-    tracing::info!(keysym = %name, code = stroke.code, mods, "typed");
+// Key emission lives in main.rs: `vk_emit_keysym` sends keycodes through this
+// state's virtual keyboard, and `im_commit_text` is the input-method path.
+
+// ── keymap memfd ───────────────────────────────────────────────────────────
+
+struct KeymapWithFd {
+    fd: OwnedFd,
+    size: u32,
 }
 
-/// Builds a sealed, shared memfd holding `text` as a NUL-terminated
-/// buffer, ready to send as `set_keymap`'s fd + size.
-pub fn make_keymap_fd(text: &[u8]) -> rustix::io::Result<(OwnedFd, u32)> {
-    let size = text.len() + 1; // +1 for the trailing NUL the protocol expects
+/// Builds a sealed memfd holding `text` as a NUL-terminated buffer, ready to
+/// send as `set_keymap`'s fd + size.
+///
+/// The memfd is sealed against shrinking, growing and writing, so the
+/// compositor can safely `mmap` it without the contents changing under it.
+/// The Wayland wire layer dups the fd when the request is queued, so the
+/// returned `OwnedFd` can be dropped once `keymap` has been called.
+fn make_keymap_fd(text: &[u8]) -> io::Result<KeymapWithFd> {
+    // +1 for the trailing NUL the protocol expects.
+    let size = u32::try_from(text.len() + 1)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "keymap too large"))?;
 
-    let fd: OwnedFd = rustix::fs::memfd_create(
+    let fd = rustix::fs::memfd_create(
         c"mechanix-keyboard-keymap",
         MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
     )?;
 
-    rustix::fs::ftruncate(&fd, size as u64)?;
-
-    // SAFETY: `fd` is a valid memfd truncated to `size` bytes; the mapping
-    // is unmapped (via the guard below) before this function returns, and
-    // nothing else touches `fd` concurrently.
-    let map = unsafe {
-        rustix::mm::mmap(
-            std::ptr::null_mut(),
-            size,
-            ProtFlags::READ | ProtFlags::WRITE,
-            MapFlags::SHARED,
-            &fd,
-            0,
-        )?
-    };
-
-    struct MmapGuard(*mut core::ffi::c_void, usize);
-    impl Drop for MmapGuard {
-        fn drop(&mut self) {
-            unsafe {
-                let _ = rustix::mm::munmap(self.0, self.1);
-            }
-        }
-    }
-    let guard = MmapGuard(map, size);
-
-    // SAFETY: `guard.0` points to `size` writable, exclusively-mapped bytes.
-    // We write `text.len()` bytes then the NUL, totaling exactly `size`
-    // bytes, so this cannot read or write out of bounds. The mapping was
-    // freshly ftruncate'd, so the trailing byte is already zero, but we
-    // set it explicitly for clarity/robustness.
-    unsafe {
-        std::ptr::copy_nonoverlapping(text.as_ptr(), guard.0.cast(), text.len());
-        *(guard.0 as *mut u8).add(text.len()) = 0;
-    }
-    drop(guard);
+    let mut file = File::from(fd);
+    file.write_all(text)?;
+    file.write_all(&[0])?;
+    let fd = OwnedFd::from(file);
 
     rustix::fs::fcntl_add_seals(
         &fd,
         SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE | SealFlags::SEAL,
     )?;
 
-    Ok((fd, size as u32))
+    Ok(KeymapWithFd { fd, size })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The same default US keymap the running app uploads.
-    fn us_keymap() -> Keymap {
-        let ctx = Context::new(0);
-        Keymap::new_from_names(&ctx, "", "", "us", "", None, 0).expect("compile us keymap")
-    }
+    use std::os::unix::fs::FileExt;
 
     #[test]
-    fn shifted_keysym_carries_shift_on_the_same_key() {
-        let keymap = us_keymap();
-        let map = scan_keycodes(&keymap);
+    fn keymap_fd_holds_nul_terminated_text_and_is_sealed() {
+        let keymap = make_keymap_fd(b"xkb_keymap {}").unwrap();
+        assert_eq!(keymap.size, 14);
 
-        // A plain lowercase letter is level 0: a bare keycode, no modifiers.
-        let q = map[&Keysym::from_char('q')];
-        assert_eq!(q.mods, 0, "lowercase q should need no modifiers");
+        let file = File::from(keymap.fd);
+        let mut buf = vec![0; 14];
+        file.read_exact_at(&mut buf, 0).unwrap();
+        assert_eq!(buf, b"xkb_keymap {}\0");
 
-        // Its uppercase reaches the *same physical key*, plus a non-empty mask —
-        // this is exactly what was missing before (uppercase typed nothing).
-        let cap_q = map[&Keysym::from_char('Q')];
-        assert_eq!(cap_q.code, q.code, "Q must be the q key, shifted");
-        assert_ne!(cap_q.mods, 0, "Q must carry the Shift mask");
-
-        // The upper view's symbols ride the same mechanism: `!` is Shift+1.
-        let one = map[&Keysym::from_char('1')];
-        let bang = map[&Keysym::from_char('!')];
-        assert_eq!(one.mods, 0, "digit 1 should need no modifiers");
-        assert_eq!(bang.code, one.code, "! must be the 1 key, shifted");
-        assert_ne!(bang.mods, 0, "! must carry the Shift mask");
-    }
-
-    /// Control keysyms must not resolve to text — otherwise BackSpace would be
-    /// committed as the literal string "BackSpace" (its X11 name) instead of
-    /// deleting. They fall back to the virtual-keyboard-v1 keysym transport.
-    #[test]
-    fn control_keysyms_produce_no_text() {
-        // BackSpace, Return, Tab, Escape, Delete all yield a control code
-        // point (or none at all), so none should produce committable text.
-        let backspace = xkb::keysym_from_name("BackSpace", xkb::KEYSYM_NO_FLAGS);
-        let ret = xkb::keysym_from_name("Return", xkb::KEYSYM_NO_FLAGS);
-        let tab = xkb::keysym_from_name("Tab", xkb::KEYSYM_NO_FLAGS);
-        let esc = xkb::keysym_from_name("Escape", xkb::KEYSYM_NO_FLAGS);
-        let del = xkb::keysym_from_name("Delete", xkb::KEYSYM_NO_FLAGS);
-        assert_eq!(keysym_text(backspace), None, "BackSpace must not be text");
-        assert_eq!(keysym_text(ret), None, "Return must not be text");
-        assert_eq!(keysym_text(tab), None, "Tab must not be text");
-        assert_eq!(keysym_text(esc), None, "Escape must not be text");
-        assert_eq!(keysym_text(del), None, "Delete must not be text");
-
-        // Printable keysyms resolve to their character, not their X11 name.
-        assert_eq!(keysym_text(Keysym::from_char('q')), Some("q".into()));
-        assert_eq!(keysym_text(Keysym::from_char('Q')), Some("Q".into()));
-        assert_eq!(keysym_text(Keysym::from_char('!')), Some("!".into()));
-        assert_eq!(keysym_text(Keysym::from_char(' ')), Some(" ".into()));
+        let seals = rustix::fs::fcntl_get_seals(&file).unwrap();
+        assert!(
+            seals
+                .contains(SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE | SealFlags::SEAL)
+        );
+        assert!(file.write_at(b"x", 0).is_err());
+        assert!(file.set_len(0).is_err());
     }
 }

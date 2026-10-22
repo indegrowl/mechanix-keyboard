@@ -1,25 +1,49 @@
-use assets::SpriteRegion;
+use crate::font::Font;
+use crate::key_style::{self, KeyLook, KeyStyle, KeyStyleSpec};
+use crate::{color_role, shape, spacing};
+use mecha_wayland::prelude::{ColorRole, ThemeMode};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::{env, fs};
 use tracing::{info, warn};
-use utils::Rect;
 use xkbcommon::xkb::{self, Keysym};
-
-use crate::{MechanixKeyboardState, icons};
 
 #[derive(Debug, Deserialize)]
 struct Layout {
+    #[serde(default)]
+    keyboard: KeyboardSpec,
+    /// Named key colour styles; a button picks one with `key_style:`.
+    #[serde(default)]
+    key_styles: HashMap<String, KeyStyleSpec>,
     outlines: HashMap<String, Outline>,
     views: HashMap<String, Vec<String>>,
     #[serde(default)]
     buttons: HashMap<String, Button>,
 }
 
+/// Applies to the entire keyboard container layout
+#[derive(Debug, Default, Deserialize)]
+struct KeyboardSpec {
+    mode: Option<String>,
+    background: Option<String>,
+    radius: Option<String>,
+    gap: Option<f32>,
+    #[serde(rename = "row-gap")]
+    row_gap: Option<f32>,
+    padding: Option<f32>,
+    width: Option<f32>,
+    height: Option<f32>,
+    font: Option<String>,
+    #[serde(rename = "font-size")]
+    font_size: Option<u16>,
+}
+
+/// A button's size. Only the width is used — it sets the key's flex-grow
+/// weight within its row. Rows split the keyboard height evenly, so an
+/// outline's `height:` in the YAML is accepted but ignored.
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct Outline {
     width: f32,
-    height: f32,
 }
 
 /// A squeekboard button's `action:` value — either a bare name (`erase`,
@@ -55,18 +79,140 @@ struct Button {
     #[serde(default)]
     action: Option<ActionSpec>,
     modifier: Option<String>,
+    key_style: Option<String>,
 }
 
 /// Size used when a button names an outline that isn't defined (and no
 /// `default` outline exists to fall back to). Keeps conversion total.
-const FALLBACK_OUTLINE: Outline = Outline {
-    width: 50.0,
-    height: 50.0,
-};
+const FALLBACK_OUTLINE: Outline = Outline { width: 50.0 };
 
 #[derive(Debug)]
 pub struct Keymap {
     pub views: Vec<View>,
+    pub keyboard: KeyboardStyle,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct KeyboardStyle {
+    pub mode: ThemeMode,
+    pub background_color: ColorRole,
+    /// Key corner radius in logical px, resolved from a `Shape` token.
+    pub radius: f32,
+    /// Spacing in logical px, each resolved from a `Spacing` token.
+    pub gap: f32,
+    pub row_gap: f32,
+    pub padding: f32,
+    /// Window width in logical px; `None` spans the whole output.
+    pub width: Option<f32>,
+    /// Window height in logical px.
+    pub height: f32,
+    pub font: Font,
+    pub font_size: u16,
+}
+
+impl Default for KeyboardStyle {
+    fn default() -> Self {
+        Self {
+            mode: ThemeMode::Dark,
+            background_color: ColorRole::Surface,
+            radius: 6.0,
+            gap: 4.0,
+            row_gap: 4.0,
+            padding: 4.0,
+            width: None,
+            height: 280.0,
+            font: Font::Geist,
+            font_size: 16,
+        }
+    }
+}
+
+/// Keep a size only if it's greater than zero, warning otherwise. Works for
+/// any numeric field (`f32` dimensions, `u16` font size); `NaN` is rejected
+/// since it doesn't compare greater than zero.
+fn positive<T>(field: &str, value: Option<T>) -> Option<T>
+where
+    T: Copy + Default + PartialOrd + std::fmt::Display,
+{
+    value.filter(|&v| {
+        let ok = v > T::default();
+        if !ok {
+            warn!("keyboard {field} {v} must be greater than 0; using the default");
+        }
+        ok
+    })
+}
+
+/// Resolve an optional `Spacing` token to px, warning and keeping `default`
+/// for a value that isn't a token.
+fn resolve_spacing(field: &str, value: Option<f32>, default: f32) -> f32 {
+    match value {
+        None => default,
+        Some(px) => match spacing::from_px(px) {
+            Some(token) => token.dp(),
+            None => {
+                warn!("keyboard {field} {px} is not a spacing token; using {default}");
+                default
+            }
+        },
+    }
+}
+
+impl KeyboardStyle {
+    /// Resolve the raw `keyboard:` block; an unrecognised value warns and
+    /// keeps its default.
+    fn resolve(spec: &KeyboardSpec) -> Self {
+        // TODO: Have it behind a trait
+        let default = Self::default();
+        let mode = match spec.mode.as_deref() {
+            None => default.mode,
+            Some("dark") => ThemeMode::Dark,
+            Some("light") => ThemeMode::Light,
+            Some(other) => {
+                warn!(
+                    "keyboard mode {other:?} is unknown (expected `dark` or `light`); using dark"
+                );
+                default.mode
+            }
+        };
+        let background_color = match spec.background.as_deref() {
+            None => default.background_color,
+            Some(name) => color_role::from_name(name).unwrap_or_else(|| {
+                warn!("keyboard background {name:?} is not a colour role; using `surface`");
+                default.background_color
+            }),
+        };
+        let radius = match spec.radius.as_deref() {
+            None => default.radius,
+            Some(name) => match shape::from_name(name) {
+                // No component height is needed: `full` isn't accepted.
+                Some(shape) => shape.resolve_radius_dp(0.0),
+                None => {
+                    warn!("keyboard radius {name:?} is not a shape token; using the default");
+                    default.radius
+                }
+            },
+        };
+        let font = match spec.font.as_deref() {
+            None => default.font,
+            Some(name) => Font::from_name(name).unwrap_or_else(|| {
+                warn!("keyboard font {name:?} is not a bundled font; using the default");
+                default.font
+            }),
+        };
+        Self {
+            mode,
+            background_color,
+            radius,
+            gap: resolve_spacing("gap", spec.gap, default.gap),
+            row_gap: resolve_spacing("row-gap", spec.row_gap, default.row_gap),
+            padding: resolve_spacing("padding", spec.padding, default.padding),
+            width: positive("width", spec.width),
+            height: positive("height", spec.height).unwrap_or(default.height),
+            font,
+            font_size: positive("font-size", spec.font_size).unwrap_or(default.font_size),
+        }
+    }
 }
 
 /// One selectable arrangement of keys (e.g. `base`, `upper`).
@@ -83,12 +229,31 @@ pub struct Row {
 }
 
 /// What a key draws in its cell: a text label *or* a symbolic icon, never both.
-/// Resolved at IR-build time — the icon is already its baked atlas sprite region,
-/// so the renderer does no per-frame lookup.
+/// The icon is its name (an SVG's file stem under `resources/icons`); the `Key`
+/// widget looks up the rasterized sprite in the `Icons` resource.
 #[derive(Debug, Clone)]
 pub enum KeyFace {
     Text(String),
-    Icon(SpriteRegion),
+    Icon(String),
+}
+
+/// A latchable modifier, named as squeekboard's `modifier:` field names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Modifier {
+    Control,
+    Alt,
+}
+
+impl Modifier {
+    pub const ALL: [Modifier; 2] = [Modifier::Control, Modifier::Alt];
+
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Control" => Some(Self::Control),
+            "Alt" => Some(Self::Alt),
+            _ => None,
+        }
+    }
 }
 
 /// What a Key *does* when activated — the behavioural counterpart to `KeyFace`.
@@ -106,43 +271,26 @@ pub enum KeyAction {
     /// Flip between two named views by current view (squeekboard `locking`): go
     /// to `lock` normally, or back to `unlock` when `lock` is already current.
     ToggleView { lock: String, unlock: String },
-    /// Arm a real modifier (Control) for exactly the *next* keystroke, then it
-    /// auto-clears — the OSK one-shot latch. The modifier's mask is OR'd into the
-    /// next emitted Keystroke; tapping again disarms. Carries the squeekboard
-    /// modifier name (e.g. `Control`).
-    LatchModifier(String),
+    /// Arm a modifier for exactly the *next* keystroke, then it auto-clears —
+    /// the OSK one-shot latch. The modifier's mask is OR'd into the next emitted
+    /// Keystroke; tapping again disarms. Several modifiers can be armed at once.
+    LatchModifier(Modifier),
     /// A squeekboard action not wired this pass (prefs, and modifiers other than
-    /// Control). The key still draws and hit-tests; tapping it logs but types
-    /// nothing. Carries a name for that log.
+    /// Control/Alt). The key still draws and hit-tests; tapping it logs but
+    /// types nothing. Carries a name for that log.
     Unhandled(String),
 }
 
 /// One drawable key: what to draw, what it does, and where (logical units).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Key {
     pub face: KeyFace,
     pub action: KeyAction,
-    pub rect: Rect,
-    pub touch_area: Rect,
-}
-
-impl Key {
-    /// A human-readable label for bring-up tracing (hover/tap). Icon keys have no
-    /// text — and we dropped their name when resolving to a region — so they log
-    /// as `[icon]`.
-    pub fn display_label(&self) -> &str {
-        match &self.face {
-            KeyFace::Text(s) => s,
-            KeyFace::Icon(_) => "[icon]",
-        }
-    }
-}
-
-impl Row {
-    /// The row's keys.
-    pub fn keys(&self) -> &[Key] {
-        &self.keys
-    }
+    /// The key's outline width (logical units).
+    pub width: f32,
+    /// Colours per `KeyState`, from the button's `key_style:` (or `normal`)
+    /// and the `latched` style.
+    pub look: KeyLook,
 }
 
 impl View {
@@ -150,101 +298,69 @@ impl View {
     pub fn keys(&self) -> impl Iterator<Item = &Key> {
         self.rows.iter().flat_map(|row| row.keys.iter())
     }
-
-    /// The view's intrinsic logical width: the right edge of its widest row.
-    pub fn width(&self) -> f32 {
-        self.keys().map(|k| k.rect.right()).fold(0.0_f32, f32::max)
-    }
-
-    /// The view's intrinsic logical height: the bottom edge of its last row.
-    pub fn height(&self) -> f32 {
-        self.keys().map(|k| k.rect.bottom()).fold(0.0_f32, f32::max)
-    }
 }
 
 impl Keymap {
     /// Every key in the keymap, flattened across every view.
+    #[cfg(test)]
     pub fn keys(&self) -> impl Iterator<Item = &Key> {
         self.views.iter().flat_map(|view| view.keys())
     }
 
-    /// Look a view up by name (e.g. the initial `base` view to render).
+    /// Look a view up by name.
+    #[cfg(test)]
     pub fn view(&self, name: &str) -> Option<&View> {
         self.views.iter().find(|v| v.name == name)
     }
 
-    /// The index of the view with this name, for storing as the current view.
-    /// Resolved once per switch so per-frame reads stay O(1) array indexing.
-    pub fn index_of(&self, name: &str) -> Option<usize> {
-        self.views.iter().position(|v| v.name == name)
-    }
-
     /// Convert a parsed squeekboard layout into the IR, resolving each key's
-    /// label and geometry.
+    /// face, action, width and look.
     fn from_layout(layout: &Layout) -> Self {
+        let styles = key_style::resolve_all(&layout.key_styles);
         let views = layout
             .views
             .iter()
-            .map(|(name, rows)| View::resolve(layout, name, rows))
+            .map(|(name, rows)| View::resolve(layout, &styles, name, rows))
             .collect();
-        Keymap { views }
+        let keyboard = KeyboardStyle::resolve(&layout.keyboard);
+        Keymap { views, keyboard }
     }
 }
 
 impl View {
-    /// Resolve one view's rows into laid-out keys.
-    ///
-    /// Two passes: first resolve every key's face + outline, then flow them.
-    /// Keys butt together left-to-right with no gap; each row's height is the
-    /// max key height in it; rows stack top-down; and each row is centred
-    /// within the view's width (the widest row), matching squeekboard's look.
-    fn resolve(layout: &Layout, name: &str, rows: &[String]) -> View {
-        // Pass 1: resolve face + action + size for every key, grouped by row.
-        let sized: Vec<Vec<(KeyFace, KeyAction, Outline)>> = rows
+    /// Resolve one view's rows into keys. Positioning is left to the flex
+    /// layout in main.rs; each key carries only its outline width.
+    fn resolve(
+        layout: &Layout,
+        styles: &HashMap<String, KeyStyle>,
+        name: &str,
+        rows: &[String],
+    ) -> View {
+        let out_rows = rows
             .iter()
             .map(|row| {
-                row.split_whitespace()
+                let keys = row
+                    .split_whitespace()
                     .map(|token| {
                         let button = layout.buttons.get(token);
-                        let outline = resolve_outline(layout, button);
-                        let face = resolve_face(token, button);
                         let action = resolve_action(token, button);
-                        (face, action, outline)
+                        let look = KeyLook::for_button(
+                            styles,
+                            token,
+                            button.and_then(|b| b.key_style.as_deref()),
+                            types_digit(&action),
+                        );
+                        Key {
+                            face: resolve_face(token, button),
+                            action,
+                            width: resolve_outline(layout, button).width,
+                            look,
+                        }
                     })
-                    .collect()
+                    .collect();
+                Row { keys }
             })
             .collect();
-
-        // The view is as wide as its widest row.
-        let view_width = sized
-            .iter()
-            .map(|row| row.iter().map(|(_, _, o)| o.width).sum::<f32>())
-            .fold(0.0_f32, f32::max);
-
-        // Pass 2: flow each row, centred, stacking downward.
-        let mut y = 0.0_f32;
-        let mut out_rows = Vec::with_capacity(sized.len());
-        for row in &sized {
-            let row_width: f32 = row.iter().map(|(_, _, o)| o.width).sum();
-            let row_height = row.iter().map(|(_, _, o)| o.height).fold(0.0_f32, f32::max);
-            let mut x = (view_width - row_width) / 2.0;
-            let keys = row
-                .iter()
-                .map(|(face, action, o)| {
-                    let rect = Rect::new(x, y, o.width, o.height);
-                    let key = Key {
-                        face: face.clone(),
-                        action: action.clone(),
-                        rect,
-                        touch_area: rect,
-                    };
-                    x += o.width;
-                    key
-                })
-                .collect();
-            out_rows.push(Row { keys });
-            y += row_height;
-        }
 
         View {
             name: name.to_string(),
@@ -254,26 +370,34 @@ impl View {
 }
 
 /// Resolve a button token's face. Icon wins over label when both are set
-/// (matching squeekboard) — and warns. An icon name absent from the dictionary
-/// warns and falls back to an empty text face, so the key draws its box but no
-/// glyph. With neither icon nor label, the button's own name is the label.
+/// (matching squeekboard) — and warns. With neither icon nor label, the
+/// button's own name is the label.
 fn resolve_face(token: &str, button: Option<&Button>) -> KeyFace {
     if let Some(icon) = button.and_then(|b| b.icon.as_deref()) {
         if button.and_then(|b| b.label.as_deref()).is_some() {
             warn!("button {token:?} sets both `icon` and `label`; using icon {icon:?}");
         }
-        return match icons::icon_region(icon) {
-            Some(region) => KeyFace::Icon(region),
-            None => {
-                warn!("icon {icon:?} not in the icon dictionary; drawing empty key");
-                KeyFace::Text(String::new())
-            }
-        };
+        return KeyFace::Icon(icon.to_string());
     }
     let label = button
         .and_then(|b| b.label.clone())
         .unwrap_or_else(|| token.to_string());
     KeyFace::Text(label)
+}
+
+fn types_digit(action: &KeyAction) -> bool {
+    let text = match action {
+        KeyAction::EmitKeysym(ks) => char::from_u32(xkb::keysym_to_utf32(*ks)),
+        KeyAction::EmitText(text) => {
+            let mut chars = text.chars();
+            chars.next().filter(|_| chars.next().is_none())
+        }
+        KeyAction::SetView(_)
+        | KeyAction::ToggleView { .. }
+        | KeyAction::LatchModifier(_)
+        | KeyAction::Unhandled(_) => None,
+    };
+    text.is_some_and(|c| c.is_ascii_digit())
 }
 
 /// Resolve a button token's Key action — what it emits when tapped. Priority:
@@ -310,14 +434,14 @@ fn resolve_action(token: &str, button: Option<&Button>) -> KeyAction {
             Some(ActionSpec::Other(_)) => return KeyAction::Unhandled(token.to_string()),
             None => {}
         }
-        // A modifier button latches for the next keystroke. Only Control is wired
-        // this pass (see `virtual_keyboard::toggle_latch` and its `mod_masks`);
-        // every other modifier still defers to `Unhandled`.
+        // A modifier button latches for the next keystroke. Only Control and Alt
+        // are wired (see `toggle_latch` in main.rs and `virtual_keyboard`'s
+        // `mod_masks`); every other modifier still defers to `Unhandled`.
         if let Some(m) = b.modifier.as_deref() {
-            if m == "Control" {
-                return KeyAction::LatchModifier(m.to_string());
-            }
-            return KeyAction::Unhandled(token.to_string());
+            return match Modifier::from_name(m) {
+                Some(m) => KeyAction::LatchModifier(m),
+                None => KeyAction::Unhandled(token.to_string()),
+            };
         }
         if let Some(text) = &b.text {
             return KeyAction::EmitText(text.clone());
@@ -364,40 +488,48 @@ fn resolve_outline(layout: &Layout, button: Option<&Button>) -> Outline {
 
 static FALLBACK_LAYOUT: &str = include_str!("../resources/layout.yaml");
 
-/// Load and convert the layout on startup, storing the IR on state.
-pub fn module<S>() -> impl app::RegisteredModule<MechanixKeyboardState, S> {
-    app::Module::new().on(|s: &mut MechanixKeyboardState, _: &app::Start| {
-        let contents = match env::var("MECHA_KBD_LAYOUT") {
-            Ok(path) => fs::read_to_string(path).expect("Error: Failed to read layout file"),
-            Err(_) => {
-                let local = std::path::Path::new("layout.yaml");
-                if local.is_file() {
-                    info!("Using layout.yaml from working directory");
-                    fs::read_to_string(local).expect("Error: Failed to read layout file")
-                } else {
-                    warn!("Warning: No config path provided! Using fallback...");
-                    FALLBACK_LAYOUT.into()
-                }
+/// Load and convert the layout on startup. Checks `MECHA_KBD_LAYOUT` env var,
+/// then `layout.yaml` in the working directory, then the bundled fallback.
+pub fn load_keymap() -> Keymap {
+    let contents = match env::var("MECHA_KBD_LAYOUT") {
+        Ok(path) => fs::read_to_string(path).expect("Error: Failed to read layout file"),
+        Err(_) => {
+            let local = std::path::Path::new("layout.yaml");
+            if local.is_file() {
+                info!("Using layout.yaml from working directory");
+                fs::read_to_string(local).expect("Error: Failed to read layout file")
+            } else {
+                warn!("Warning: No config path provided! Using fallback...");
+                FALLBACK_LAYOUT.into()
             }
-        };
-
-        let layout: Layout = yaml_serde::from_str(&contents).expect("Error: Failed to parse yaml");
-        let keymap = Keymap::from_layout(&layout);
-
-        info!("loaded keymap: {} view(s)", keymap.views.len());
-        for view in &keymap.views {
-            info!("  view {}: {} key(s)", view.name, view.keys().count());
         }
+    };
 
-        // Start on the initial view; fall back to the first view if it's absent.
-        s.current_view = keymap.index_of(crate::INITIAL_VIEW).unwrap_or(0);
-        s.keymap = Some(keymap);
-    })
+    let layout: Layout = yaml_serde::from_str(&contents).expect("Error: Failed to parse yaml");
+    let keymap = Keymap::from_layout(&layout);
+
+    info!("loaded keymap: {} view(s)", keymap.views.len());
+    for view in &keymap.views {
+        info!("  view {}: {} key(s)", view.name, view.keys().count());
+    }
+
+    keymap
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn positive_keeps_only_sizes_above_zero() {
+        assert_eq!(positive("height", Some(280.0)), Some(280.0));
+        assert_eq!(positive("height", Some(0.0)), None);
+        assert_eq!(positive("height", Some(-1.0)), None);
+        assert_eq!(positive("height", Some(f32::NAN)), None);
+        assert_eq!(positive::<f32>("height", None), None);
+        assert_eq!(positive("font-size", Some(16u16)), Some(16));
+        assert_eq!(positive("font-size", Some(0u16)), None);
+    }
 
     /// A `Button` with only the fields a test cares about set.
     fn button(f: impl FnOnce(&mut Button)) -> Button {
@@ -486,10 +618,10 @@ mod tests {
             KeyAction::Unhandled(_)
         ));
 
-        // Alt is a modifier, but not wired to latch this pass — still deferred.
-        let alt = button(|b| b.modifier = Some("Alt".into()));
+        // Super is a modifier, but not wired to latch this pass — still deferred.
+        let sup = button(|b| b.modifier = Some("Super".into()));
         assert!(matches!(
-            resolve_action("Alt", Some(&alt)),
+            resolve_action("Super", Some(&sup)),
             KeyAction::Unhandled(_)
         ));
     }
@@ -499,7 +631,16 @@ mod tests {
         let ctrl = button(|b| b.modifier = Some("Control".into()));
         assert!(matches!(
             resolve_action("Ctrl", Some(&ctrl)),
-            KeyAction::LatchModifier(m) if m == "Control"
+            KeyAction::LatchModifier(Modifier::Control)
+        ));
+    }
+
+    #[test]
+    fn alt_modifier_latches() {
+        let alt = button(|b| b.modifier = Some("Alt".into()));
+        assert!(matches!(
+            resolve_action("Alt", Some(&alt)),
+            KeyAction::LatchModifier(Modifier::Alt)
         ));
     }
 
@@ -533,8 +674,9 @@ mod tests {
             .keys()
             .filter(|k| matches!(k.action, KeyAction::EmitKeysym(_) | KeyAction::EmitText(_)))
             .count();
+        // 26 letters plus `, . space ⌫ DONE` in the Figma 4-row layout.
         assert!(
-            typeable >= 40,
+            typeable >= 31,
             "base view should have many typeable keys, got {typeable}"
         );
     }

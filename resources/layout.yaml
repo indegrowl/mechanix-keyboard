@@ -1,34 +1,65 @@
+# config for the entire keyboard layout
+keyboard:
+  mode: dark
+  background: surface-container-low
+  radius: none
+  gap: 8
+  row-gap: 12
+  padding: 8
+  width: 540
+  height: 252
+  font: geist
+  font-size: 20
+
+key_styles:
+    normal:   { background: surface-container-high,    foreground: on-surface }
+    number:   { background: surface-container-high,    foreground: on-surface,           font: geist-mono }
+    function: { background: surface-container-highest, foreground: on-surface,           font: geist-mono, font-size: 18 }
+    bottom:   { background: surface-container-high,    foreground: on-surface,           font-size: 16 }
+    done:     { background: on-secondary-container,    foreground: on-primary-container, font-size: 18 }
+    latched:  { background: primary,                   foreground: on-primary }
+    emoji:    { background: surface-container-highest, foreground: primary }
+    return:	  { background: primary,                   foreground: on-primary }
+
 outlines:
-    default:   { width: 50,     height: 50 }
+    default:   { width: 44,     height: 44 }
+    narrow:    { width: 40,     height: 44 }
+    altline:   { width: 60,     height: 44 }
+    switch:    { width: 64,     height: 44 }
+    done:      { width: 80,     height: 44 }
+    spaceline: { width: 226,    height: 44 }
     menu:      { width: 100,    height: 50 }
-    altline:   { width: 70,     height: 50 }
-    spaceline: { width: 160,    height: 50 }
     special:   { width: 35.33,  height: 50 }
     action:    { width: 85,     height: 50 }
     fkey:      { width: 42,     height: 50 }
 
+# The Figma "Default, abc", "Caps Lock, ABC", "123" and "#+=" screens.
 views:
     base:
-        - "1 2 3 4 5 6 7 8 9 0"
         - "q w e r t y u i o p"
         - "a s d f g h j k l"
-        - "Shift_L   z x c v b n m  BackSpace"
-        - "show_symbols show_eschars preferences         space        , . Return"
-        - "Ctrl Tab ← ↑ ↓ →"
+        - "Shift_L  z x c v b n m  BackSpace"
+        - "show_numbers show_emoji comma  space  period done"
     upper:
-        - "! @ # $ % ^ & * ( )"
         - "Q W E R T Y U I O P"
         - "A S D F G H J K L"
-        - "Shift_L   Z X C V B N M  BackSpace"
-        - "show_symbols show_eschars preferences         space        Menu Return"
-        - "Alt Esc PgUp PgDn Home End"
+        - "Shift_L  Z X C V B N M  BackSpace"
+        - "show_numbers show_emoji comma  space  period done"
+    numbers:
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "- / : ; ( ) $ & @ ”"
+        - "show_symbols  . , ? ! ’  BackSpace"
+        - "show_letters show_emoji comma  space  period done"
     symbols:
-        - "~ ` ´ - _ + = ° © ®"
-        - "[ ] { } \\ | ÷ × √"
-        - "; : ' \" · € £ ¥"
-        - "Del / ? § π τ µ ¶ BackSpace"
-        - "show_letters show_eschars preferences         space        < > Return"
-        - "Ctrl Tab ← ↑ ↓ →"
+        - "[ ] { } # % ^ * + ="
+        - "_ \\ | ~ ( ) $ & @ ”"
+        - "show_numbers < . , ? ! ’ > BackSpace"
+        - "show_letters show_emoji comma  space  period done"
+    terminal_symbols:
+        - "[ ] { } # % ^ * + ="
+        - "_ \\ | ~ ( ) $ & @ ”"
+        - "< . , ? ! ’ > BackSpace"
+        - "Terminal_show_letters show_emoji comma  space  period Return"
     eschars:
         - "F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12"
         - "ä è é ö ü Ä È É Ö Ü"
@@ -36,24 +67,50 @@ views:
         - "Del  « » ç Ç æ œ ß  BackSpace"
         - "show_symbols show_eschars preferences         space        „ “ Return"
         - "Alt Esc PgUp PgDn Home End"
+    terminal:
+        - "Esc Ctrl Alt Tab | ~ ` / \\ BackSpace"
+        - "1 2 3 4 5 6 7 9 0"
+        - "q w e r t y u i o p"
+        - "a s d f g h j k l Return"
+        - "Terminal_Shift_L  z x c v b n m , ."
+        - "Terminal_show_symbols : - _ space ← ↑ ↓ →"
+    terminal_upper:
+        - "Esc Ctrl Alt Tab | ~ ` / \\ BackSpace"
+        - "1 2 3 4 5 6 7 9 0"
+        - "Q W E R T Y U I O P"
+        - "A S D F G H J K L Return"
+        - "Terminal_Shift_L  Z X C V B N M , ."
+        - "Terminal_show_symbols : - _ space ← ↑ ↓ →"
 
 buttons:
     Shift_L:
+        key_style: "function"
         action:
             locking:
                 lock_view: "upper"
                 unlock_view: "base"
         outline: "altline"
         icon: "key-shift-symbolic"
+    Terminal_Shift_L:
+        key_style: "function"
+        action:
+            locking:
+                lock_view: "terminal_upper"
+                unlock_view: "terminal"
+        outline: "altline"
+        icon: "key-shift-symbolic"
     Ctrl:
+        key_style: "function"
         modifier: "Control"
         outline: "action"
         label: "Ctrl"
     Alt:
+        key_style: "function"
         modifier: "Alt"
         outline: "action"
         label: "Alt"
     BackSpace:
+        key_style: "function"
         outline: "altline"
         icon: "edit-clear-symbolic"
         action: "erase"
@@ -65,15 +122,53 @@ buttons:
         outline: "special"
         icon: "preferences-system-symbolic"
     show_letters:
+        key_style: "function"
         action:
             set_view: "base"
-        outline: "altline"
+        outline: "switch"
         label: "abc"
+    Terminal_show_letters:
+        key_style: "function"
+        action:
+            set_view: "terminal"
+        outline: "switch"
+        label: "abc"
+    show_numbers:
+        key_style: "function"
+        action:
+            set_view: "numbers"
+        outline: "switch"
+        label: "123"
     show_symbols:
+        key_style: "function"
         action:
             set_view: "symbols"
-        outline: "altline"
-        label: "[{/"
+        outline: "switch"
+        label: "#+="
+    Terminal_show_symbols:
+        key_style: "function"
+        action:
+            set_view: "terminal_symbols"
+        outline: "switch"
+        label: "#+="
+    # Placeholder: there's no emoji view yet, so this logs and types nothing.
+    show_emoji:
+        key_style: "emoji"
+        action: "show_emoji"
+        outline: "narrow"
+        icon: "face-smile-symbolic"
+    comma:
+        outline: "narrow"
+        label: ","
+    period:
+        outline: "narrow"
+        label: "."
+    # Figma's DONE key; sends Return until it has its own behaviour.
+    done:
+        key_style: "done"
+        outline: "done"
+        label: "DONE"
+        keysym: "Return"
     show_eschars:
         action:
             locking:
@@ -89,6 +184,7 @@ buttons:
         outline: "altline"
         icon: "key-enter-symbolic"
         keysym: "Return"
+        key_style: "return"
     F1:
         outline: "fkey"
         keysym: "F1"
@@ -126,6 +222,7 @@ buttons:
         outline: "fkey"
         keysym: "F12"
     Esc:
+        key_style: "function"
         outline: "action"
         keysym: "Escape"
     Home:
@@ -144,21 +241,22 @@ buttons:
         outline: "action"
         keysym: "Page_Down"
     Tab:
+        key_style: "function"
         outline: "action"
         keysym: "Tab"
     "↑":
-        outline: "action"
+        outline: "default"
         keysym: "Up"
         icon: "go-up-symbolic"
     "↓":
-        outline: "action"
+        outline: "default"
         keysym: "Down"
         icon: "go-down-symbolic"
     "←":
-        outline: "action"
+        outline: "default"
         keysym: "Left"
         icon: "go-previous-symbolic"
     "→":
-        outline: "action"
+        outline: "default"
         keysym: "Right"
         icon: "go-next-symbolic"

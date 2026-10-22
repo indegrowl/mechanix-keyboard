@@ -4,24 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-app            = { git = "https://github.com/mecha-org/mecha-wayland.git" }
-renderer       = { git = "https://github.com/mecha-org/mecha-wayland.git" }
-assets         = { git = "https://github.com/mecha-org/mecha-wayland.git" }
-io-ring        = { git = "https://github.com/mecha-org/mecha-wayland.git" }
-wayland        = { git = "https://github.com/mecha-org/mecha-wayland.git" }
-utils          = { git = "https://github.com/mecha-org/mecha-wayland.git" }
-ui             = { git = "https://github.com/mecha-org/mecha-wayland.git" }
-interactivity  = { git = "https://github.com/mecha-org/mecha-wayland.git" }
-window-manager = { git = "https://github.com/mecha-org/mecha-wayland.git" }
+mecha-wayland = { git = "https://github.com/DevPika/mecha-wayland.git", branch = "layer-resize" }
 
-tracing            = "0.1"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
 yaml_serde = "0.10.7"
 xkbcommon = { version = "0.9.0", features = ["wayland"] }
-rustix = { version = "1.1.4", features = ["fs", "mm"] }
-
-[build-dependencies]
-assets = { git = "https://github.com/mecha-org/mecha-wayland.git", features = ["builder"] }
-serde = { version = "1.0.229", features = ["derive"] }
-toml = "0.8"
+rustix = { version = "1.1.4", features = ["fs"] }
