@@ -14,7 +14,7 @@
 
 #![recursion_limit = "1024"]
 
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use mecha_wayland::prelude::*;
 
@@ -25,6 +25,7 @@ mod input_method;
 mod key_style;
 mod layout;
 mod shape;
+mod sound;
 mod spacing;
 mod virtual_keyboard;
 
@@ -33,6 +34,7 @@ use font::Fonts;
 use input_method::{ApplyKeyboardVisibility, KeyboardVisibilityExt, TextInputFocused};
 use key_style::{KeyLook, KeyState};
 use layout::{KeyAction, KeyFace, Keymap, Modifier};
+use sound::KeySound;
 /// The default view: shown when the keyboard first appears and for text
 /// fields with no more specific purpose. Must exist in `layout.yaml`.
 const BASE_VIEW: &str = "base";
@@ -184,6 +186,11 @@ impl Widget for Key {
 
         *s.component_mut::<Paint>(me).unwrap() =
             Paint::Quad(Quad::new(s.color(bg_role)).radius(radius));
+
+        *s.component_mut::<PaintAnimationSettings>(me).unwrap() = PaintAnimationSettings::new(
+            AnimationTime::Duration(Duration::from_millis(150)),
+            Easing::Linear,
+        );
 
         let fg = s.color(fg_role);
         let label = match &b.key.face {
@@ -375,6 +382,7 @@ impl Widget for Keyboard {
                     */
                     let action = key.action.clone();
                     s.on::<Clicked>(key_handle, move |ctx, _| {
+                        ctx.resource::<KeySound>().play();
                         dispatch(ctx, &action);
                     });
                 }
@@ -742,9 +750,12 @@ fn main() {
         .add_module(PaintModule)
         .add_module(WindowModule)
         .add_module(InteractivityModule)
+        .add_module(AnimationModule)
         .add_module(RenderModule::default())
         .insert_resource(Atlas::new());
     app.insert_resource(LatchedState::default());
+    // Open the audio stream up front so the first tap has no device-open lag.
+    app.insert_resource(KeySound::load());
 
     let theme = match keymap.keyboard.mode {
         ThemeMode::Dark => MechanixTheme::dark(),
