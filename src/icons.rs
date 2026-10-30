@@ -34,9 +34,9 @@ impl Icons {
     pub fn load(atlas: &mut Atlas, size: u32) -> Self {
         let mut icons: HashMap<String, SpriteId> = HashMap::new();
         for &(name, bytes) in BUNDLED {
-            let bitmap = Bitmap::from_svg(bytes, size)
-                .unwrap_or_else(|e| panic!("bundled icon {name:?} loads: {e:?}"));
-            let sprite = atlas.insert(Class::Icon, &bitmap).unwrap();
+            let sprite = atlas
+                .insert_svg(bytes, size)
+                .unwrap_or_else(|e| panic!("bundled icon {name:?} loads: {e}"));
             icons.insert(name.to_owned(), sprite);
         }
         Self { icons }
