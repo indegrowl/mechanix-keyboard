@@ -222,6 +222,12 @@ impl Widget for Key {
             set_label_color(ctx, label, fg);
         });
 
+        if !is_latch && fade_test_on() {
+            let a = Paint::Quad(Quad::new(s.color(bg_role)).radius(radius));
+            let b = Paint::Quad(Quad::new(s.color(fg_role)).radius(radius));
+            FADE.with(|f| f.borrow_mut().keys.push((me.into(), a, b)));
+        }
+
         if !is_latch {
             s.on::<Press>(me, move |ctx, _| {
                 let bg = ctx.color(bg_role);
@@ -799,7 +805,90 @@ fn main() {
             keymap,
         },
     );
+    if fade_test_on() {
+        app.system(fade_tick);
+    }
     app.run();
+}
+
+// ── EXPERIMENT (frogger CPU): fade one key forever ────────────────────────
+
+fn fade_test_on() -> bool {
+    std::env::var_os("MECHA_KBD_FADE_TEST").is_some()
+}
+
+/// Every non-latch key, with its normal and pressed paint; which one fades is
+/// picked at each flip: the first one on screen.
+struct Fade {
+    keys: Vec<(NodeId, Paint, Paint)>,
+    current: Option<usize>,
+    last: std::time::Instant,
+    pressed: bool,
+}
+
+thread_local! {
+    static FADE: std::cell::RefCell<Fade> = std::cell::RefCell::new(Fade {
+        keys: Vec::new(),
+        current: None,
+        last: std::time::Instant::now(),
+        pressed: false,
+    });
+    static FADE_TIMER: std::cell::Cell<Option<Token>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether `id` and every ancestor are displayed.
+fn on_screen(app: &App, id: NodeId) -> bool {
+    std::iter::once(id)
+        .chain(app.ancestors(id))
+        .all(|n| app.component::<LayoutStyle>(n).is_none_or(|s| s.display != Display::Hidden))
+}
+
+/// Flip a visible key every 140 ms, just before its 150 ms paint animation
+/// ends, so the keyboard animates continuously at the display rate. A ring
+/// timer keeps the loop waking even with nothing else going on. When the
+/// faded key leaves the screen (a view switch), it is put back to normal and
+/// the first key still on screen takes over.
+fn fade_tick(app: &mut App, _: &Tick) {
+    {
+        let mut ring = app.resource_mut::<Ring>();
+        if let Some(t) = FADE_TIMER.get() {
+            if ring.finish(t).is_some() {
+                FADE_TIMER.set(None);
+            }
+        }
+        if FADE_TIMER.get().is_none() {
+            FADE_TIMER.set(Some(ring.timeout(Duration::from_millis(140))));
+        }
+    }
+    let due = FADE.with(|f| f.borrow().last.elapsed() >= Duration::from_millis(140));
+    if !due {
+        return;
+    }
+    let keys: Vec<NodeId> = FADE.with(|f| f.borrow().keys.iter().map(|k| k.0).collect());
+    let Some(pick) = keys.iter().position(|&id| on_screen(app, id)) else {
+        return;
+    };
+    let writes = FADE.with(|f| {
+        let mut f = f.borrow_mut();
+        let mut writes = Vec::new();
+        if let Some(old) = f.current
+            && old != pick
+        {
+            writes.push((f.keys[old].0, f.keys[old].1.clone()));
+            f.pressed = false;
+        }
+        f.current = Some(pick);
+        f.pressed = !f.pressed;
+        f.last = std::time::Instant::now();
+        let (id, normal, pressed) = &f.keys[pick];
+        writes.push((*id, if f.pressed { pressed.clone() } else { normal.clone() }));
+        writes
+    });
+    for (id, paint) in writes {
+        if let Some(mut c) = app.component_mut::<Paint>(id) {
+            c.set_if_neq(paint);
+        }
+    }
 }
 
 #[cfg(test)]

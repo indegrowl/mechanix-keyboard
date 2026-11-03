@@ -36,6 +36,11 @@ impl Resource for KeySound {}
 
 impl KeySound {
     pub fn load() -> Self {
+        // EXPERIMENT (frogger CPU): never open the audio stream.
+        if std::env::var_os("MECHANIX_KBD_NO_AUDIO").is_some() || true {
+            tracing::warn!("key sound disabled for CPU experiment");
+            return Self(None);
+        }
         match Output::open() {
             Ok(out) => Self(Some(out)),
             Err(err) => {
